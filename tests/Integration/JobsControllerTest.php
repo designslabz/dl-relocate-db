@@ -221,6 +221,31 @@ final class JobsControllerTest extends WP_UnitTestCase {
 		$this->assertSame( 'crq_relocate_duplicate_search', $response->get_data()['code'] );
 	}
 
+	public function test_case_insensitive_duplicates_are_found_beyond_ascii(): void {
+		wp_set_current_user( self::$admin_id );
+
+		$response = $this->request(
+			'POST',
+			'/jobs',
+			array(
+				'pairs'          => array(
+					array(
+						'search'  => 'École',
+						'replace' => 'a',
+					),
+					array(
+						'search'  => 'école',
+						'replace' => 'b',
+					),
+				),
+				'case_sensitive' => false,
+				'tables'         => array( 'wptests_posts' ),
+			)
+		);
+
+		$this->assertSame( 'crq_relocate_duplicate_search', $response->get_data()['code'] );
+	}
+
 	public function test_unknown_job_is_not_found(): void {
 		wp_set_current_user( self::$admin_id );
 

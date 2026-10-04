@@ -13,6 +13,8 @@ use CraftRoq\Relocate\Admin\LogTable;
 
 defined( 'ABSPATH' ) || exit;
 
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- Included from a method, so these variables are local.
+
 /** @var \CraftRoq\Relocate\Jobs\Job $job */
 $job  = $args['job'];
 $user = get_userdata( $job->user_id );
@@ -36,8 +38,14 @@ foreach ( $job->settings['exclude_columns'] ?? array() as $table_name => $table_
 ?>
 <p class="crq-back"><a href="<?php echo esc_url( Admin::url( 'history' ) ); ?>">&larr; <?php esc_html_e( 'All jobs', 'cr-relocate-db' ); ?></a></p>
 
-<div class="crq-title-row">
-	<h2 class="crq-title"><?php echo esc_html( Admin::job_title( $job ) ); ?> <?php echo Admin::status_badge( $job ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped HTML. ?></h2>
+<div class="crq-title-row crq-job-head">
+	<div>
+		<p class="crq-job-meta">
+			<span class="crq-type crq-type-<?php echo $job->dry_run ? 'dry' : 'live'; ?>"><?php echo esc_html( Admin::job_title( $job ) ); ?></span>
+			<?php echo Admin::status_badge( $job ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped HTML. ?>
+		</p>
+		<h2 class="crq-title crq-job-title"><?php echo Admin::job_change( $job ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Escaped HTML. ?></h2>
+	</div>
 	<?php if ( Admin::can_delete( $job ) ) : ?>
 		<a href="<?php echo esc_url( Admin::delete_url( $job->id ) ); ?>" class="button button-link-delete crq-delete-job" data-job="<?php echo esc_attr( Admin::job_title( $job ) ); ?>">
 			<span class="dashicons dashicons-trash" aria-hidden="true"></span> <?php esc_html_e( 'Delete job', 'cr-relocate-db' ); ?>
@@ -46,9 +54,7 @@ foreach ( $job->settings['exclude_columns'] ?? array() as $table_name => $table_
 </div>
 
 <section class="crq-card" aria-label="<?php esc_attr_e( 'Job details', 'cr-relocate-db' ); ?>">
-<dl class="crq-summary">
-	<dt><?php echo esc_html( _n( 'Search and replace', 'Search and replace', count( $job->pairs() ), 'cr-relocate-db' ) ); ?></dt>
-	<dd>
+	<?php if ( count( $job->pairs() ) > 1 ) : ?>
 		<ul class="crq-pair-list">
 			<?php foreach ( $job->pairs() as [ $pair_search, $pair_replace ] ) : ?>
 				<li>
@@ -58,68 +64,92 @@ foreach ( $job->settings['exclude_columns'] ?? array() as $table_name => $table_
 				</li>
 			<?php endforeach; ?>
 		</ul>
-	</dd>
-
-	<dt><?php esc_html_e( 'Options', 'cr-relocate-db' ); ?></dt>
-	<dd><?php echo esc_html( $options ? implode( ', ', $options ) : __( 'Defaults', 'cr-relocate-db' ) ); ?></dd>
-
-	<?php if ( $excluded ) : ?>
-		<dt><?php esc_html_e( 'Columns left out', 'cr-relocate-db' ); ?></dt>
-		<dd><code><?php echo esc_html( implode( ', ', $excluded ) ); ?></code></dd>
 	<?php endif; ?>
 
-	<dt><?php esc_html_e( 'Tables', 'cr-relocate-db' ); ?></dt>
-	<dd>
-		<details>
-			<summary><?php echo esc_html( number_format_i18n( count( $job->settings['tables'] ) ) ); ?></summary>
-			<code><?php echo esc_html( implode( ', ', $job->settings['tables'] ) ); ?></code>
-		</details>
-	</dd>
-
-	<dt><?php esc_html_e( 'Started by', 'cr-relocate-db' ); ?></dt>
-	<dd>
-		<?php
-		// Jobs started from WP-CLI without --user have no user.
-		echo esc_html( $user ? $user->display_name : ( 0 === $job->user_id ? __( 'WP-CLI', 'cr-relocate-db' ) : __( 'Unknown user', 'cr-relocate-db' ) ) );
-		?>
-	</dd>
-
-	<dt><?php esc_html_e( 'Created', 'cr-relocate-db' ); ?></dt>
-	<dd><?php echo esc_html( Admin::format_date( $job->created_at ) ); ?></dd>
-
-	<dt><?php esc_html_e( 'Finished', 'cr-relocate-db' ); ?></dt>
-	<dd><?php echo esc_html( Admin::format_date( $job->finished_at ) ); ?></dd>
-
-	<?php if ( $job->parent_id ) : ?>
-		<dt><?php esc_html_e( 'Previewed by', 'cr-relocate-db' ); ?></dt>
-		<dd>
-			<a href="<?php echo esc_url( Admin::job_url( $job->parent_id ) ); ?>">
+	<dl class="crq-facts">
+		<div>
+			<dt><?php esc_html_e( 'Options', 'cr-relocate-db' ); ?></dt>
+			<dd><?php echo esc_html( $options ? implode( ', ', $options ) : __( 'Defaults', 'cr-relocate-db' ) ); ?></dd>
+		</div>
+		<div>
+			<dt><?php esc_html_e( 'Tables', 'cr-relocate-db' ); ?></dt>
+			<dd>
+				<details>
+					<summary>
+						<?php
+						$table_count = count( $job->settings['tables'] );
+						/* translators: %s: number of tables. */
+						echo esc_html( sprintf( _n( '%s table', '%s tables', $table_count, 'cr-relocate-db' ), number_format_i18n( $table_count ) ) );
+						?>
+					</summary>
+					<code><?php echo esc_html( implode( ', ', $job->settings['tables'] ) ); ?></code>
+				</details>
+			</dd>
+		</div>
+		<?php if ( $excluded ) : ?>
+			<div>
+				<dt><?php esc_html_e( 'Columns left out', 'cr-relocate-db' ); ?></dt>
+				<dd><code><?php echo esc_html( implode( ', ', $excluded ) ); ?></code></dd>
+			</div>
+		<?php endif; ?>
+		<div>
+			<dt><?php esc_html_e( 'Started by', 'cr-relocate-db' ); ?></dt>
+			<dd>
 				<?php
-				/* translators: %d: job number. */
-				echo esc_html( sprintf( __( 'Dry run #%d', 'cr-relocate-db' ), $job->parent_id ) );
+				// Jobs started from WP-CLI without --user have no user.
+				echo esc_html( $user ? $user->display_name : ( 0 === $job->user_id ? __( 'WP-CLI', 'cr-relocate-db' ) : __( 'Unknown user', 'cr-relocate-db' ) ) );
 				?>
-			</a>
-		</dd>
-	<?php endif; ?>
-
-	<?php if ( $args['child_id'] ) : ?>
-		<dt><?php esc_html_e( 'Applied by', 'cr-relocate-db' ); ?></dt>
-		<dd>
-			<a href="<?php echo esc_url( Admin::job_url( $args['child_id'] ) ); ?>">
-				<?php
-				/* translators: %d: job number. */
-				echo esc_html( sprintf( __( 'Replacement #%d', 'cr-relocate-db' ), $args['child_id'] ) );
-				?>
-			</a>
-		</dd>
-	<?php endif; ?>
-</dl>
+			</dd>
+		</div>
+		<div>
+			<dt><?php esc_html_e( 'Created', 'cr-relocate-db' ); ?></dt>
+			<dd><?php echo esc_html( Admin::format_date( $job->created_at ) ); ?></dd>
+		</div>
+		<div>
+			<dt><?php esc_html_e( 'Finished', 'cr-relocate-db' ); ?></dt>
+			<dd><?php echo esc_html( Admin::format_date( $job->finished_at ) ); ?></dd>
+		</div>
+		<?php if ( $job->parent_id ) : ?>
+			<div>
+				<dt><?php esc_html_e( 'Previewed by', 'cr-relocate-db' ); ?></dt>
+				<dd>
+					<a href="<?php echo esc_url( Admin::job_url( $job->parent_id ) ); ?>">
+						<?php
+						/* translators: %d: job number. */
+						echo esc_html( sprintf( __( 'Dry run #%d', 'cr-relocate-db' ), $job->parent_id ) );
+						?>
+					</a>
+				</dd>
+			</div>
+		<?php endif; ?>
+		<?php if ( $args['child_id'] ) : ?>
+			<div>
+				<dt><?php esc_html_e( 'Applied by', 'cr-relocate-db' ); ?></dt>
+				<dd>
+					<a href="<?php echo esc_url( Admin::job_url( $args['child_id'] ) ); ?>">
+						<?php
+						/* translators: %d: job number. */
+						echo esc_html( sprintf( __( 'Replacement #%d', 'cr-relocate-db' ), $args['child_id'] ) );
+						?>
+					</a>
+				</dd>
+			</div>
+		<?php endif; ?>
+	</dl>
 </section>
 
 <?php require __DIR__ . '/partials/runner.php'; ?>
 
-<section class="crq-card" aria-labelledby="crq-job-log">
-<h3 id="crq-job-log" class="crq-card-title"><?php esc_html_e( 'Log', 'cr-relocate-db' ); ?></h3>
+<details class="crq-card crq-disclosure">
+<summary>
+	<span class="crq-card-title"><?php esc_html_e( 'Log', 'cr-relocate-db' ); ?></span>
+	<span class="crq-disclosure-count">
+		<?php
+		/* translators: %s: number of log entries. */
+		echo esc_html( sprintf( _n( '%s entry', '%s entries', (int) $args['log_total'], 'cr-relocate-db' ), number_format_i18n( (int) $args['log_total'] ) ) );
+		?>
+	</span>
+</summary>
 <?php if ( $args['logs'] ) : ?>
 	<div class="crq-table-scroll">
 		<table class="widefat striped crq-tables">
@@ -168,4 +198,4 @@ foreach ( $job->settings['exclude_columns'] ?? array() as $table_name => $table_
 <?php else : ?>
 	<p class="crq-empty"><?php esc_html_e( 'No log entries for this job.', 'cr-relocate-db' ); ?></p>
 <?php endif; ?>
-</section>
+</details>

@@ -6,6 +6,8 @@ namespace CraftRoq\Relocate\Admin;
 use CraftRoq\Relocate\Jobs\Job;
 use CraftRoq\Relocate\Jobs\JobRepository;
 
+defined( 'ABSPATH' ) || exit;
+
 if ( ! class_exists( 'WP_List_Table' ) ) {
 	require_once ABSPATH . 'wp-admin/includes/class-wp-list-table.php';
 }
@@ -35,7 +37,6 @@ final class HistoryTable extends \WP_List_Table {
 		return array(
 			'cb'           => '<input type="checkbox">',
 			'job'          => __( 'Job', 'cr-relocate-db' ),
-			'values'       => __( 'Search → Replace', 'cr-relocate-db' ),
 			'tables'       => __( 'Tables', 'cr-relocate-db' ),
 			'rows_changed' => __( 'Rows changed', 'cr-relocate-db' ),
 			'replacements' => __( 'Replacements', 'cr-relocate-db' ),
@@ -140,27 +141,15 @@ final class HistoryTable extends \WP_List_Table {
 			);
 		}
 
+		// What changed leads; the job number and date are secondary.
 		return sprintf(
-			'<strong><a href="%1$s" class="row-title">%2$s</a></strong><br><span class="description">%3$s</span>%4$s',
+			'<a href="%1$s" class="crq-job-link">%2$s</a><span class="crq-job-meta"><span class="crq-type crq-type-%3$s">%4$s</span> %5$s</span>%6$s',
 			esc_url( Admin::job_url( $job->id ) ),
+			Admin::job_change( $job ),
+			$job->dry_run ? 'dry' : 'live',
 			esc_html( Admin::job_title( $job ) ),
 			esc_html( Admin::format_date( $job->created_at ) ),
 			$this->row_actions( $actions )
-		);
-	}
-
-	protected function column_values( Job $job ): string {
-		$more = count( $job->pairs() ) - 1;
-
-		return sprintf(
-			'<span class="crq-from"><code>%1$s</code></span><span class="crq-to"><span aria-hidden="true">→</span><span class="screen-reader-text">%2$s</span> <code>%3$s</code></span>%4$s',
-			esc_html( self::excerpt( $job->search ) ),
-			esc_html__( 'replaced with', 'cr-relocate-db' ),
-			esc_html( '' === $job->replace ? __( '(nothing)', 'cr-relocate-db' ) : self::excerpt( $job->replace ) ),
-			$more > 0
-				/* translators: %s: number of further search and replacement pairs. */
-				? '<span class="crq-more">' . esc_html( sprintf( _n( '+ %s more', '+ %s more', $more, 'cr-relocate-db' ), number_format_i18n( $more ) ) ) . '</span>'
-				: ''
 		);
 	}
 
@@ -206,9 +195,5 @@ final class HistoryTable extends \WP_List_Table {
 			'live'  => false,
 			default => null,
 		};
-	}
-
-	private static function excerpt( string $text ): string {
-		return mb_strlen( $text ) > 60 ? mb_substr( $text, 0, 59 ) . '…' : $text;
 	}
 }

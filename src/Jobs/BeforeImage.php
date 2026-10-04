@@ -4,6 +4,7 @@ declare( strict_types=1 );
 namespace CraftRoq\Relocate\Jobs;
 
 use CraftRoq\Relocate\Database\TableLayout;
+use CraftRoq\Relocate\Storage;
 use RuntimeException;
 
 /**
@@ -13,17 +14,15 @@ use RuntimeException;
  * It is a recovery aid, not an undo button: running it puts those cells back
  * exactly as they were, including over any edits made after the job.
  *
- * Files live in uploads/crq-relocate/ under unguessable names. The folder is
- * closed off for Apache, but that does not help on nginx, so files are only
- * ever handed out through the authenticated download handler.
+ * Files live in the plugin's Storage folder and are only handed out through
+ * the authenticated download handler.
  *
  * The native gz* functions are used because WP_Filesystem cannot append, and
  * each window's statements must reach the disk before its transaction commits.
  * phpcs:disable WordPress.WP.AlternativeFunctions
+ * phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are data, not output: they are escaped where they are shown.
  */
 final class BeforeImage {
-
-	private const DIRECTORY = 'crq-relocate';
 
 	public function __construct( private \wpdb $wpdb ) {}
 
@@ -32,15 +31,9 @@ final class BeforeImage {
 	 * @throws RuntimeException When the file cannot be created.
 	 */
 	public function create( Job $job ): string {
-		$directory = $this->directory();
+		Storage::make_directory();
 
-		if ( ! wp_mkdir_p( $directory ) ) {
-			throw new RuntimeException( sprintf( 'Could not create the folder %s.', $directory ) );
-		}
-
-		$this->protect( $directory );
-
-		$file = sprintf( 'job-%d-%s.sql.gz', $job->id, wp_generate_password( 24, false ) );
+		$file = Storage::name( 'job-' . $job->id, '.sql.gz' );
 
 		$this->write(
 			$file,
@@ -64,7 +57,8 @@ final class BeforeImage {
 	 * @throws RuntimeException When the statements cannot be written.
 	 */
 	public function append( string $file, TableLayout $layout, array $rows ): void {
-		$sql = '';
+		$wpdb = $this->wpdb;
+		$sql  = '';
 
 		foreach ( $rows as $row ) {
 			$sets  = array();
@@ -82,8 +76,9 @@ final class BeforeImage {
 			}
 
 			// prepare() swaps literal % signs for a placeholder token that query() would normally undo.
-			$sql .= $this->wpdb->remove_placeholder_escape(
-				$this->wpdb->prepare( 'UPDATE %i SET ' . implode( ', ', $sets ) . ' WHERE ' . implode( ' AND ', $where ) . ';', $args )
+			$sql .= $wpdb->remove_placeholder_escape(
+				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- $sets and $where hold placeholders only; every name and value is in $args.
+				$wpdb->prepare( 'UPDATE %i SET ' . implode( ', ', $sets ) . ' WHERE ' . implode( ' AND ', $where ) . ';', $args )
 			) . "\n";
 		}
 
@@ -94,42 +89,11 @@ final class BeforeImage {
 	 * Full path of an existing before-image file, or null.
 	 */
 	public function path( string $file ): ?string {
-		if ( '' === $file ) {
-			return null;
-		}
-
-		$path = $this->directory() . '/' . basename( $file );
-
-		return is_file( $path ) ? $path : null;
+		return Storage::path( $file );
 	}
 
 	public function delete( string $file ): void {
-		$path = $this->path( $file );
-
-		if ( null !== $path ) {
-			wp_delete_file( $path );
-		}
-	}
-
-	/**
-	 * Removes every before-image file and the folder. Used on uninstall.
-	 */
-	public function delete_all(): void {
-		$directory = $this->directory();
-
-		if ( ! is_dir( $directory ) ) {
-			return;
-		}
-
-		$names = scandir( $directory );
-
-		foreach ( false === $names ? array() : $names as $name ) {
-			if ( is_file( $directory . '/' . $name ) ) {
-				wp_delete_file( $directory . '/' . $name );
-			}
-		}
-
-		rmdir( $directory );
+		Storage::delete( $file );
 	}
 
 	/**
@@ -139,7 +103,7 @@ final class BeforeImage {
 	 * @throws RuntimeException When the file cannot be written.
 	 */
 	private function write( string $file, string $contents ): void {
-		$path   = $this->directory() . '/' . $file;
+		$path   = Storage::directory() . '/' . $file;
 		$handle = gzopen( $path, 'ab' );
 
 		if ( false === $handle ) {
@@ -151,22 +115,5 @@ final class BeforeImage {
 		if ( ! gzclose( $handle ) || strlen( $contents ) !== $written ) {
 			throw new RuntimeException( sprintf( 'Could not write to %s. The disk may be full.', $path ) );
 		}
-	}
-
-	private function protect( string $directory ): void {
-		$files = array(
-			'index.php' => "<?php\n// Silence is golden.\n",
-			'.htaccess' => "Require all denied\n<IfModule !mod_authz_core.c>\n\tDeny from all\n</IfModule>\n",
-		);
-
-		foreach ( $files as $name => $contents ) {
-			if ( ! file_exists( $directory . '/' . $name ) ) {
-				file_put_contents( $directory . '/' . $name, $contents );
-			}
-		}
-	}
-
-	private function directory(): string {
-		return wp_upload_dir( null, false )['basedir'] . '/' . self::DIRECTORY;
 	}
 }

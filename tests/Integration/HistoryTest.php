@@ -12,6 +12,8 @@ use CraftRoq\Relocate\Jobs\JobStatus;
 use CraftRoq\Relocate\Jobs\Report;
 use CraftRoq\Relocate\Logger;
 use CraftRoq\Relocate\Settings;
+use CraftRoq\Relocate\Storage;
+use CraftRoq\Relocate\Transfer\TransferRepository;
 use WP_UnitTestCase;
 
 final class HistoryTest extends WP_UnitTestCase {
@@ -27,7 +29,7 @@ final class HistoryTest extends WP_UnitTestCase {
 
 	public function tear_down(): void {
 		global $wpdb;
-		( new BeforeImage( $wpdb ) )->delete_all();
+		Storage::delete_all();
 
 		parent::tear_down();
 	}
@@ -131,7 +133,7 @@ final class HistoryTest extends WP_UnitTestCase {
 		$this->assertSame( array( $stale->id, $failed->id ), $attention );
 	}
 
-	public function test_cleanup_removes_old_finished_jobs_their_files_and_log_entries(): void {
+	public function test_cleanup_removes_old_jobs_their_files_and_log_entries(): void {
 		global $wpdb;
 
 		$images = new BeforeImage( $wpdb );
@@ -144,6 +146,9 @@ final class HistoryTest extends WP_UnitTestCase {
 
 		$old_unfinished = $this->job( false, JobStatus::Running );
 		$this->age( $old_unfinished, 40 * DAY_IN_SECONDS );
+
+		$abandoned_dry_run = $this->job( true, JobStatus::Running );
+		$this->age( $abandoned_dry_run, 40 * DAY_IN_SECONDS );
 
 		$recent = $this->job( true, JobStatus::Completed );
 
@@ -158,7 +163,8 @@ final class HistoryTest extends WP_UnitTestCase {
 
 		$this->assertNull( $this->jobs->find( $old->id ) );
 		$this->assertFileDoesNotExist( $path );
-		$this->assertNotNull( $this->jobs->find( $old_unfinished->id ), 'Unfinished jobs are never deleted.' );
+		$this->assertNotNull( $this->jobs->find( $old_unfinished->id ), 'Unfinished replacements are never deleted.' );
+		$this->assertNull( $this->jobs->find( $abandoned_dry_run->id ), 'Abandoned dry runs changed nothing, so they expire.' );
 		$this->assertNotNull( $this->jobs->find( $recent->id ) );
 		$this->assertSame( array( 'New entry.' ), array_column( $logger->entries( 1, 10 )[0], 'message' ) );
 	}
@@ -184,7 +190,7 @@ final class HistoryTest extends WP_UnitTestCase {
 	private function cleanup(): Cleanup {
 		global $wpdb;
 
-		return new Cleanup( $this->jobs, new BeforeImage( $wpdb ), new Logger( $wpdb ), new Settings() );
+		return new Cleanup( $this->jobs, new BeforeImage( $wpdb ), new Logger( $wpdb ), new Settings(), new TransferRepository( $wpdb ) );
 	}
 
 	private function job( bool $dry_run, JobStatus $status = JobStatus::Completed, string $search = 'old' ): Job {

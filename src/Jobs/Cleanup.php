@@ -5,12 +5,15 @@ namespace CraftRoq\Relocate\Jobs;
 
 use CraftRoq\Relocate\Logger;
 use CraftRoq\Relocate\Settings;
+use CraftRoq\Relocate\Storage;
+use CraftRoq\Relocate\Transfer\TransferRepository;
 use RuntimeException;
 
 /**
- * Deletes finished jobs, their before-image files and log entries once they
- * are older than the retention setting. Runs daily on WP-Cron; nothing here
- * is urgent, so a late run does no harm.
+ * Deletes finished jobs, abandoned dry runs, their before-image files, log
+ * entries, and old exports and imports with their files once they are older
+ * than the retention setting. Runs daily on
+ * WP-Cron; nothing here is urgent, so a late run does no harm.
  */
 final class Cleanup {
 
@@ -20,7 +23,8 @@ final class Cleanup {
 		private JobRepository $jobs,
 		private BeforeImage $before_images,
 		private Logger $logger,
-		private Settings $settings
+		private Settings $settings,
+		private TransferRepository $transfers
 	) {}
 
 	public function register(): void {
@@ -48,7 +52,11 @@ final class Cleanup {
 		$cutoff = gmdate( 'Y-m-d H:i:s', time() - $days * DAY_IN_SECONDS );
 
 		try {
-			$files = $this->jobs->delete_finished_before( $cutoff );
+			$files = $this->jobs->delete_expired( $cutoff );
+
+			foreach ( $this->transfers->delete_expired( $cutoff ) as $file ) {
+				Storage::delete( $file );
+			}
 		} catch ( RuntimeException $e ) {
 			$this->logger->error( 'Clean-up failed.', array( 'error' => $e->getMessage() ) );
 			return;

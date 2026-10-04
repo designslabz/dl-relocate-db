@@ -8,10 +8,13 @@ use RuntimeException;
 
 /**
  * Reads table information for the current database.
+ *
+ * phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are data, not output: they are escaped where they are shown.
+ * phpcs:disable WordPress.DB.DirectDatabaseQuery -- Reading and writing the database directly is what this plugin is for, and results must never come from a cache.
  */
 final class Schema {
 
-	private const TEXT_TYPES = array( 'char', 'varchar', 'tinytext', 'text', 'mediumtext', 'longtext', 'json' );
+	public const TEXT_TYPES = array( 'char', 'varchar', 'tinytext', 'text', 'mediumtext', 'longtext', 'json' );
 
 	private const INTEGER_TYPES = array( 'tinyint', 'smallint', 'mediumint', 'int', 'bigint' );
 
@@ -26,7 +29,8 @@ final class Schema {
 	 * @throws RuntimeException When the table list cannot be read.
 	 */
 	public function tables(): array {
-		$rows = $this->wpdb->get_results(
+		$wpdb = $this->wpdb;
+		$rows = $wpdb->get_results(
 			"SELECT TABLE_NAME AS name, ENGINE AS engine, TABLE_ROWS AS approx_rows,
 				DATA_LENGTH AS data_size, INDEX_LENGTH AS index_size, TABLE_COLLATION AS collation
 			FROM information_schema.TABLES
@@ -45,7 +49,7 @@ final class Schema {
 				(int) $row->data_size,
 				(int) $row->index_size,
 				(string) $row->collation,
-				str_starts_with( (string) $row->name, $this->wpdb->prefix )
+				str_starts_with( (string) $row->name, $wpdb->prefix )
 			),
 			$rows
 		);
@@ -78,17 +82,20 @@ final class Schema {
 	 * @throws RuntimeException When the columns cannot be read.
 	 */
 	public function searchable_columns(): array {
-		// The type list is this class's own constant, not input.
-		$columns = $this->wpdb->get_results(
-			"SELECT TABLE_NAME AS table_name, COLUMN_NAME AS name FROM information_schema.COLUMNS
-			WHERE TABLE_SCHEMA = DATABASE() AND DATA_TYPE IN ('" . implode( "', '", self::TEXT_TYPES ) . "')
-			ORDER BY TABLE_NAME, ORDINAL_POSITION"
+		$wpdb    = $this->wpdb;
+		$columns = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT TABLE_NAME AS table_name, COLUMN_NAME AS name FROM information_schema.COLUMNS
+				WHERE TABLE_SCHEMA = DATABASE() AND FIND_IN_SET(DATA_TYPE, %s)
+				ORDER BY TABLE_NAME, ORDINAL_POSITION',
+				implode( ',', self::TEXT_TYPES )
+			)
 		);
 
 		/* translators: %s: database error message. */
 		$this->check_error( __( 'Could not read the columns of a table: %s', 'cr-relocate-db' ) );
 
-		$keys = $this->wpdb->get_results(
+		$keys = $wpdb->get_results(
 			"SELECT TABLE_NAME AS table_name, COLUMN_NAME AS name FROM information_schema.STATISTICS
 			WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME = 'PRIMARY'"
 		);
@@ -113,8 +120,9 @@ final class Schema {
 	 * @throws RuntimeException When the table cannot be inspected.
 	 */
 	public function describe( string $table ): ?TableLayout {
-		$columns = $this->wpdb->get_results(
-			$this->wpdb->prepare(
+		$wpdb    = $this->wpdb;
+		$columns = $wpdb->get_results(
+			$wpdb->prepare(
 				'SELECT COLUMN_NAME AS name, DATA_TYPE AS type, COLLATION_NAME AS collation
 				FROM information_schema.COLUMNS
 				WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s
@@ -158,15 +166,48 @@ final class Schema {
 	}
 
 	/**
+	 * The columns that hold data, with their types, in table order. Generated
+	 * columns (VIRTUAL, STORED, or MariaDB's PERSISTENT) are left out: their
+	 * values are computed and cannot be inserted.
+	 *
+	 * @return array<string, string> Column => lower-case data type, e.g. "varchar".
+	 * @throws RuntimeException When the columns cannot be read.
+	 */
+	public function stored_columns( string $table ): array {
+		$wpdb    = $this->wpdb;
+		$columns = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT COLUMN_NAME AS name, DATA_TYPE AS type FROM information_schema.COLUMNS
+				WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s
+					AND EXTRA NOT REGEXP 'VIRTUAL|STORED|PERSISTENT'
+				ORDER BY ORDINAL_POSITION",
+				$table
+			)
+		);
+
+		/* translators: %s: database error message. */
+		$this->check_error( __( 'Could not read the columns of a table: %s', 'cr-relocate-db' ) );
+
+		$types = array();
+		foreach ( $columns as $column ) {
+			$types[ (string) $column->name ] = strtolower( (string) $column->type );
+		}
+
+		return $types;
+	}
+
+	/**
 	 * @return array{version: string, name: string, charset: string, collate: string, prefix: string}
 	 */
 	public function server_info(): array {
+		$wpdb = $this->wpdb;
+
 		return array(
-			'version' => (string) $this->wpdb->get_var( 'SELECT VERSION()' ),
-			'name'    => (string) $this->wpdb->get_var( 'SELECT DATABASE()' ),
-			'charset' => (string) $this->wpdb->charset,
-			'collate' => (string) $this->wpdb->collate,
-			'prefix'  => $this->wpdb->prefix,
+			'version' => (string) $wpdb->get_var( 'SELECT VERSION()' ),
+			'name'    => (string) $wpdb->get_var( 'SELECT DATABASE()' ),
+			'charset' => (string) $wpdb->charset,
+			'collate' => (string) $wpdb->collate,
+			'prefix'  => $wpdb->prefix,
 		);
 	}
 
@@ -177,8 +218,9 @@ final class Schema {
 	 * @return string[]
 	 */
 	private function key_columns( string $table ): array {
-		$rows = $this->wpdb->get_results(
-			$this->wpdb->prepare(
+		$wpdb = $this->wpdb;
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
 				'SELECT INDEX_NAME AS index_name, COLUMN_NAME AS name, NULLABLE AS nullable
 				FROM information_schema.STATISTICS
 				WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND NON_UNIQUE = 0

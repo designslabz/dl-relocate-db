@@ -8,6 +8,9 @@ use RuntimeException;
 
 /**
  * Loads and saves jobs in the jobs table.
+ *
+ * phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are data, not output: they are escaped where they are shown.
+ * phpcs:disable WordPress.DB.DirectDatabaseQuery -- Reading and writing the database directly is what this plugin is for, and results must never come from a cache.
  */
 final class JobRepository {
 
@@ -35,7 +38,8 @@ final class JobRepository {
 	}
 
 	public function find( int $id ): ?Job {
-		$row = $this->wpdb->get_row( $this->wpdb->prepare( 'SELECT * FROM %i WHERE id = %d', $this->table(), $id ) );
+		$wpdb = $this->wpdb;
+		$row  = $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM %i WHERE id = %d', $this->table(), $id ) );
 
 		return $row ? $this->from_row( $row ) : null;
 	}
@@ -44,9 +48,17 @@ final class JobRepository {
 	 * The live job started from this dry run, if there is one.
 	 */
 	public function child_id( int $parent_id ): ?int {
-		$id = $this->wpdb->get_var( $this->wpdb->prepare( 'SELECT id FROM %i WHERE parent_id = %d LIMIT 1', $this->table(), $parent_id ) );
+		$wpdb = $this->wpdb;
+		$id   = $wpdb->get_var( $wpdb->prepare( 'SELECT id FROM %i WHERE parent_id = %d LIMIT 1', $this->table(), $parent_id ) );
 
 		return null === $id ? null : (int) $id;
+	}
+
+	/**
+	 * Whether a live job was ever started from this dry run, even one since deleted.
+	 */
+	public function was_applied( Job $dry_run ): bool {
+		return ! empty( $dry_run->state['applied'] ) || null !== $this->child_id( $dry_run->id );
 	}
 
 	/**
@@ -60,6 +72,7 @@ final class JobRepository {
 	 * @return array{0: list<Job>, 1: int} The page of jobs and the total number of matching jobs.
 	 */
 	public function page( int $page, int $per_page, ?bool $dry_run = null, string $orderby = 'id', string $order = 'desc', string $search = '' ): array {
+		$wpdb       = $this->wpdb;
 		$conditions = array();
 		$args       = array();
 
@@ -69,7 +82,7 @@ final class JobRepository {
 		}
 
 		if ( '' !== $search ) {
-			$like = '%' . $this->wpdb->esc_like( $search ) . '%';
+			$like = '%' . $wpdb->esc_like( $search ) . '%';
 			// Extra pairs live in the settings JSON, stored with unescaped slashes and Unicode.
 			$conditions[] = '(search LIKE %s OR replace_with LIKE %s OR settings LIKE %s)';
 			array_push( $args, $like, $like, $like );
@@ -79,14 +92,16 @@ final class JobRepository {
 		$orderby = in_array( $orderby, self::SORTABLE, true ) ? $orderby : 'id';
 		$order   = 'asc' === strtolower( $order ) ? 'ASC' : 'DESC';
 
-		$rows = $this->wpdb->get_results(
-			// phpcs:ignore WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- Placeholders and values are built together.
-			$this->wpdb->prepare(
+		// $where holds only placeholders, with their values in $args; $order is ASC or DESC.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$rows  = $wpdb->get_results(
+			$wpdb->prepare(
 				'SELECT * FROM %i' . $where . ' ORDER BY %i ' . $order . ', id ' . $order . ' LIMIT %d OFFSET %d',
 				array_merge( array( $this->table() ), $args, array( $orderby, $per_page, max( 0, $page - 1 ) * $per_page ) )
 			)
 		);
-		$total = (int) $this->wpdb->get_var( $this->wpdb->prepare( 'SELECT COUNT(*) FROM %i' . $where, array_merge( array( $this->table() ), $args ) ) );
+		$total = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i' . $where, array_merge( array( $this->table() ), $args ) ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return array( array_map( array( $this, 'from_row' ), $rows ), $total );
 	}
@@ -95,8 +110,9 @@ final class JobRepository {
 	 * @return array{jobs: int, replacements_run: int, replacements_made: int}
 	 */
 	public function stats(): array {
-		$row = $this->wpdb->get_row(
-			$this->wpdb->prepare(
+		$wpdb = $this->wpdb;
+		$row  = $wpdb->get_row(
+			$wpdb->prepare(
 				'SELECT COUNT(*) AS jobs, SUM(dry_run = 0) AS runs, SUM(CASE WHEN dry_run = 0 THEN replacements ELSE 0 END) AS replacements FROM %i',
 				$this->table()
 			)
@@ -114,7 +130,8 @@ final class JobRepository {
 	}
 
 	public function latest_live_job(): ?Job {
-		$row = $this->wpdb->get_row( $this->wpdb->prepare( 'SELECT * FROM %i WHERE dry_run = 0 ORDER BY id DESC LIMIT 1', $this->table() ) );
+		$wpdb = $this->wpdb;
+		$row  = $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM %i WHERE dry_run = 0 ORDER BY id DESC LIMIT 1', $this->table() ) );
 
 		return $row ? $this->from_row( $row ) : null;
 	}
@@ -125,8 +142,9 @@ final class JobRepository {
 	 * @return list<Job>
 	 */
 	public function needing_attention(): array {
-		$rows = $this->wpdb->get_results(
-			$this->wpdb->prepare(
+		$wpdb = $this->wpdb;
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
 				'SELECT * FROM %i WHERE status IN (%s, %s) OR (status = %s AND dry_run = 0) ORDER BY id DESC LIMIT 20',
 				$this->table(),
 				JobStatus::Pending->value,
@@ -144,19 +162,24 @@ final class JobRepository {
 	}
 
 	/**
-	 * Deletes finished jobs last touched before the cutoff.
+	 * Deletes jobs last touched before the cutoff: finished jobs, and dry runs
+	 * abandoned part-way, which changed nothing. An unfinished replacement is
+	 * kept until someone resumes or cancels it, since it is half applied.
 	 *
 	 * @param string $cutoff UTC datetime.
 	 * @return list<string> Before-image files of the deleted jobs, for the caller to remove.
 	 */
-	public function delete_finished_before( string $cutoff ): array {
-		$rows = $this->wpdb->get_results(
-			$this->wpdb->prepare(
-				'SELECT id, before_image FROM %i WHERE status IN (%s, %s, %s) AND updated_at < %s',
+	public function delete_expired( string $cutoff ): array {
+		$wpdb = $this->wpdb;
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT id, before_image FROM %i WHERE (status IN (%s, %s, %s) OR (dry_run = 1 AND status IN (%s, %s))) AND updated_at < %s',
 				$this->table(),
 				JobStatus::Completed->value,
 				JobStatus::Failed->value,
 				JobStatus::Cancelled->value,
+				JobStatus::Pending->value,
+				JobStatus::Running->value,
 				$cutoff
 			)
 		);
@@ -167,15 +190,16 @@ final class JobRepository {
 
 		$ids = array_map( fn( object $row ): int => (int) $row->id, $rows );
 
-		$deleted = $this->wpdb->query(
-			$this->wpdb->prepare(
+		$deleted = $wpdb->query(
+			$wpdb->prepare(
+				// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- One %d placeholder per ID.
 				'DELETE FROM %i WHERE id IN (' . implode( ', ', array_fill( 0, count( $ids ), '%d' ) ) . ')',
 				array_merge( array( $this->table() ), $ids )
 			)
 		);
 
 		if ( false === $deleted ) {
-			throw new RuntimeException( 'Could not delete old jobs: ' . $this->wpdb->last_error );
+			throw new RuntimeException( 'Could not delete old jobs: ' . $wpdb->last_error );
 		}
 
 		return array_values( array_filter( array_map( fn( object $row ): string => (string) $row->before_image, $rows ) ) );
@@ -186,8 +210,9 @@ final class JobRepository {
 	 * be resumed, but they should not block every future replacement.
 	 */
 	public function active_live_job(): ?Job {
-		$id = $this->wpdb->get_var(
-			$this->wpdb->prepare(
+		$wpdb = $this->wpdb;
+		$id   = $wpdb->get_var(
+			$wpdb->prepare(
 				'SELECT id FROM %i WHERE dry_run = 0 AND status IN (%s, %s) ORDER BY id DESC LIMIT 1',
 				$this->table(),
 				JobStatus::Pending->value,

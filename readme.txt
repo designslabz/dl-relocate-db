@@ -1,4 +1,4 @@
-=== CR Relocate DB – Search Replace & Migration ===
+=== CR Relocate DB ===
 Contributors: craftroq
 Tags: search replace, migration, database, urls, serialized
 Requires at least: 6.5
@@ -46,6 +46,8 @@ Tables are processed in small batches by primary key, a few seconds per request,
 * Case-insensitive and whole-word matching, and matching the http:// and protocol-relative versions of a URL.
 * A live progress view with the current table, rows scanned, changes found and time remaining.
 * A searchable, sortable history of every job, a log, and automatic clean-up. Old jobs can also be deleted by hand.
+* Import / Export: download the database as a .sql.gz file and import .sql or .sql.gz files, in resumable steps, with the site address changed on the way out or on the way in.
+* Export and import the plugin's settings as a JSON file.
 * WP-CLI commands: `wp crq search-replace` and `wp crq resume`.
 
 == Installation ==
@@ -53,6 +55,16 @@ Tables are processed in small batches by primary key, a few seconds per request,
 1. Upload the plugin to `/wp-content/plugins/cr-relocate-db`, or install it from the Plugins screen.
 2. Activate it.
 3. Open **Relocate** in the admin menu.
+
+== Screenshots ==
+
+1. Dashboard: start a search and replace, or pick up a recent job.
+2. Choose what to replace, up to five pairs at once, and which tables to look in.
+3. Live progress: the current table, rows scanned, changes found and time remaining.
+4. The dry run: what would change, with before and after examples. Nothing is written yet.
+5. Confirm before anything is written, and keep a file of the original values.
+6. Import / Export: download the database with the site address changed on the way out.
+7. History: every dry run and replacement, searchable and sortable.
 
 == Frequently Asked Questions ==
 
@@ -74,7 +86,7 @@ The batch in progress either completes or is rolled back (on InnoDB tables, whic
 
 = Does it support Multisite? =
 
-The free plugin works on single sites. Multisite support is planned for CR Relocate DB Pro. On a Multisite network the free plugin shows a notice and does not run.
+The free plugin works on single sites. Multisite support is planned for CR Relocate DB Pro. On a Multisite network the free plugin does not run, and says so on the Plugins screen.
 
 = Which tables does it search? =
 
@@ -91,4 +103,4 @@ No. Everything happens in your own database. Nothing is sent to CraftRoq or anyo
 == Changelog ==
 
 = 0.1.0 =
-* First development release.
+* First release: search and replace with dry runs, serialized data and JSON support, database import and export, history, and WP-CLI commands.

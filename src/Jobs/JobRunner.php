@@ -3,6 +3,7 @@ declare( strict_types=1 );
 
 namespace CraftRoq\Relocate\Jobs;
 
+use CraftRoq\Relocate\Database\Lock;
 use CraftRoq\Relocate\Database\Schema;
 use CraftRoq\Relocate\Database\TableLayout;
 use CraftRoq\Relocate\Installer;
@@ -24,6 +25,9 @@ use RuntimeException;
  * values are written and the job's position is saved, then it commits. If
  * anything fails the window rolls back as a whole, so resuming never applies
  * a window twice.
+ *
+ * phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are data, not output: they are escaped where they are shown.
+ * phpcs:disable WordPress.DB.DirectDatabaseQuery -- Reading and writing the database directly is what this plugin is for, and results must never come from a cache.
  */
 final class JobRunner {
 
@@ -83,7 +87,7 @@ final class JobRunner {
 		// Wait for a step in progress to finish rather than overwrite what it saves.
 		$id = $job->id;
 
-		if ( ! $this->lock( $this->lock_name( $id ), (int) ceil( $this->step_seconds() ) + 5 ) ) {
+		if ( ! $this->lock( $this->lock_name( $id ), (int) ceil( self::step_seconds() ) + 5 ) ) {
 			return null;
 		}
 
@@ -164,13 +168,13 @@ final class JobRunner {
 
 		$replacement = $job->replacement();
 		$batch       = new TableBatch( $this->wpdb, $replacement, new Replacer( $replacement ), $this->settings->batch_size(), ! $job->dry_run );
-		$deadline    = microtime( true ) + $this->step_seconds();
+		$deadline    = microtime( true ) + self::step_seconds();
 
 		try {
 			while ( null !== $job->current_table() ) {
 				$this->process_window( $job, $batch, $job->current_table() );
 
-				if ( microtime( true ) >= $deadline || $this->memory_is_low() ) {
+				if ( microtime( true ) >= $deadline || self::memory_is_low() ) {
 					$this->jobs->save( $job );
 					return;
 				}
@@ -296,23 +300,21 @@ final class JobRunner {
 			return;
 		}
 
-		$this->query( 'START TRANSACTION' );
+		$wpdb = $this->wpdb;
+
+		if ( false === $wpdb->query( 'START TRANSACTION' ) ) {
+			throw new RuntimeException( $wpdb->last_error );
+		}
 
 		try {
 			$work();
-			$this->query( 'COMMIT' );
-		} catch ( RuntimeException $e ) {
-			$this->wpdb->query( 'ROLLBACK' );
-			throw $e;
-		}
-	}
 
-	/**
-	 * @throws RuntimeException When the statement fails.
-	 */
-	private function query( string $sql ): void {
-		if ( false === $this->wpdb->query( $sql ) ) {
-			throw new RuntimeException( $this->wpdb->last_error );
+			if ( false === $wpdb->query( 'COMMIT' ) ) {
+				throw new RuntimeException( $wpdb->last_error );
+			}
+		} catch ( RuntimeException $e ) {
+			$wpdb->query( 'ROLLBACK' );
+			throw $e;
 		}
 	}
 
@@ -320,7 +322,16 @@ final class JobRunner {
 	 * Rows were changed behind the object cache's back, so anything it holds may be stale.
 	 */
 	private function flush_cache( Job $job ): void {
-		if ( ! $job->dry_run ) {
+		/**
+		 * Filters whether to flush the whole object cache after a replacement.
+		 *
+		 * A persistent cache shared with other sites is flushed for all of them.
+		 * Return false there, and clear this site's cache some other way.
+		 *
+		 * @param bool $flush Default true.
+		 * @param Job  $job   The replacement that has just stopped.
+		 */
+		if ( ! $job->dry_run && apply_filters( 'crq_relocate_flush_object_cache', true, $job ) ) {
 			wp_cache_flush();
 		}
 	}
@@ -381,7 +392,7 @@ final class JobRunner {
 		}
 	}
 
-	private function step_seconds(): float {
+	public static function step_seconds(): float {
 		/**
 		 * Filters how long one step may work before it saves and returns.
 		 *
@@ -396,22 +407,21 @@ final class JobRunner {
 		return $limit > 0 ? min( $seconds, $limit / 2 ) : $seconds;
 	}
 
-	private function memory_is_low(): bool {
+	public static function memory_is_low(): bool {
 		$limit = wp_convert_hr_to_bytes( (string) ini_get( 'memory_limit' ) );
 
 		return $limit > 0 && memory_get_usage() > $limit * 0.6;
 	}
 
 	/**
-	 * A named database lock per job. MySQL releases it by itself if the request
-	 * dies, so a crashed step never leaves a job stuck.
+	 * A named database lock per job, so a crashed step never leaves a job stuck.
 	 */
 	private function lock( string $name, int $timeout ): bool {
-		return '1' === $this->wpdb->get_var( $this->wpdb->prepare( 'SELECT GET_LOCK(SHA1(CONCAT(DATABASE(), %s)), %d)', $name, $timeout ) );
+		return ( new Lock( $this->wpdb ) )->acquire( $name, $timeout );
 	}
 
 	private function unlock( string $name ): void {
-		$this->wpdb->query( $this->wpdb->prepare( 'SELECT RELEASE_LOCK(SHA1(CONCAT(DATABASE(), %s)))', $name ) );
+		( new Lock( $this->wpdb ) )->release( $name );
 	}
 
 	private function lock_name( int $job_id ): string {

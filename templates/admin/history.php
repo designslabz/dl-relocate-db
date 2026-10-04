@@ -11,6 +11,8 @@ use CraftRoq\Relocate\Admin\Admin;
 
 defined( 'ABSPATH' ) || exit;
 
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- Included from a method, so these variables are local.
+
 if ( isset( $args['error'] ) ) {
 	wp_admin_notice( esc_html( $args['error'] ), array( 'type' => 'error' ) );
 	printf( '<p><a href="%1$s">%2$s</a></p>', esc_url( Admin::url( 'history' ) ), esc_html__( 'Back to all jobs', 'cr-relocate-db' ) );
@@ -48,6 +50,7 @@ if ( $args['kept'] ) {
 $is_log = 'log' === $args['view'];
 ?>
 <h2 class="crq-title"><?php esc_html_e( 'History', 'cr-relocate-db' ); ?></h2>
+<p class="crq-intro"><?php esc_html_e( 'Every dry run and replacement. Open one to see exactly what it changed, download its original values, or continue it if it stopped.', 'cr-relocate-db' ); ?></p>
 
 <nav class="crq-subnav" aria-label="<?php esc_attr_e( 'History views', 'cr-relocate-db' ); ?>">
 	<a href="<?php echo esc_url( Admin::url( 'history' ) ); ?>" class="<?php echo $is_log ? '' : 'is-active'; ?>"<?php echo $is_log ? '' : ' aria-current="page"'; ?>><?php esc_html_e( 'Jobs', 'cr-relocate-db' ); ?></a>

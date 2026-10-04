@@ -23,6 +23,10 @@
 	const API = '/crq-relocate/v1/jobs';
 	const PAGE_SIZE = 25;
 
+	// Waits before each automatic retry of a failed step: a dropped connection
+	// or a proxy timeout usually clears within seconds.
+	const RETRY_DELAYS = [ 2000, 5000, 15000 ];
+
 	const form = document.getElementById( 'crq-search-replace' );
 	const submitButton = form ? form.querySelector( '[type="submit"]' ) : null;
 	const notices = document.getElementById( 'crq-notices' );
@@ -92,6 +96,7 @@
 	function initForm() {
 		initPairs();
 		initColumnMenus();
+		initWizard();
 
 		const filter = document.getElementById( 'crq-table-filter' );
 		const count = document.getElementById( 'crq-table-count' );
@@ -148,12 +153,18 @@
 			updateCount();
 		} );
 
-		form.addEventListener( 'input', updateSummary );
-		form.addEventListener( 'change', updateSummary );
-
 		form.addEventListener( 'change', ( event ) => {
 			if ( 'tables[]' === event.target.name ) {
 				updateCount();
+			}
+
+			if ( 'scope' === event.target.name ) {
+				applyScope();
+				updateCount();
+			}
+
+			if ( event.target.closest( '.crq-options' ) ) {
+				updateAdvancedSummary();
 			}
 
 			const columns = event.target.closest( '.crq-columns' );
@@ -165,44 +176,124 @@
 		} );
 
 		form.addEventListener( 'submit', onSubmit );
+		applyScope();
 		updateCount();
-		updateSummary();
+		updateAdvancedSummary();
 	}
 
 	/**
-	 * The sticky summary next to the form, so the choices are visible from anywhere on the page.
+	 * Steps 1 and 2 of the form, one at a time. Step 3 is the preview, which
+	 * replaces the form once a dry run starts.
 	 */
-	function updateSummary() {
-		const summary = document.getElementById( 'crq-form-summary' );
+	function initWizard() {
+		form.addEventListener( 'click', ( event ) => {
+			if ( event.target.closest( '[data-crq-next]' ) ) {
+				const invalid = [ ...wizardStep( 1 ).querySelectorAll( 'input' ) ].find( ( input ) => ! input.checkValidity() );
 
-		if ( ! summary ) {
+				if ( invalid ) {
+					invalid.reportValidity();
+					return;
+				}
+
+				showWizardStep( 2 );
+			}
+
+			if ( event.target.closest( '[data-crq-back]' ) ) {
+				showWizardStep( 1 );
+			}
+		} );
+
+		// Coming from the dashboard with the values filled in, step 1 is already done.
+		if ( '2' === form.dataset.startStep ) {
+			showWizardStep( 2, false );
+		}
+	}
+
+	function wizardStep( number ) {
+		return form.querySelector( `.crq-wizard-step[data-step="${ number }"]` );
+	}
+
+	/**
+	 * @param {number}  number Step to show: 1 or 2.
+	 * @param {boolean} focus  Whether to move focus to the step's heading.
+	 */
+	function showWizardStep( number, focus = true ) {
+		form.hidden = false;
+		form.querySelectorAll( '.crq-wizard-step' ).forEach( ( step ) => {
+			step.hidden = Number( step.dataset.step ) !== number;
+		} );
+
+		if ( 2 === number ) {
+			renderRecap();
+		}
+
+		setStep( number );
+
+		if ( focus ) {
+			wizardStep( number ).querySelector( '.crq-wizard-title' ).focus();
+		}
+	}
+
+	/**
+	 * Step 2 repeats what step 1 asked for, with a way back to change it.
+	 */
+	function renderRecap() {
+		const pairs = pairsFrom( new FormData( form ) ).filter( ( pair ) => pair.search );
+		const edit = el( 'button', { type: 'button', className: 'crq-link-button' }, __( 'Change', 'cr-relocate-db' ) );
+		edit.dataset.crqBack = '';
+
+		document.getElementById( 'crq-recap' ).replaceChildren(
+			el( 'span', { className: 'crq-recap-label' }, __( 'Replacing', 'cr-relocate-db' ) ),
+			el(
+				'ul',
+				{ className: 'crq-pair-list' },
+				...pairs.map( ( pair ) => el(
+					'li',
+					{},
+					el( 'code', {}, pair.search ),
+					el( 'span', { ariaHidden: 'true' }, ' → ' ),
+					el( 'span', { className: 'screen-reader-text' }, __( 'replaced with', 'cr-relocate-db' ) ),
+					pair.replace ? el( 'code', {}, pair.replace ) : el( 'em', {}, __( '(removed)', 'cr-relocate-db' ) )
+				) )
+			),
+			edit
+		);
+	}
+
+	/**
+	 * "All WordPress tables" selects exactly the prefixed tables with every
+	 * column; "Let me choose" opens the list to change that.
+	 */
+	function applyScope() {
+		const scope = form.querySelector( 'input[name="scope"]:checked' );
+		const custom = ! scope || 'custom' === scope.value;
+
+		document.getElementById( 'crq-picker-panel' ).hidden = ! custom;
+
+		if ( custom ) {
 			return;
 		}
 
-		const data = new FormData( form );
-		const pairs = data.getAll( 'search[]' ).filter( Boolean ).length;
-		const boxes = [ ...form.querySelectorAll( 'input[name="tables[]"]' ) ];
-		const selected = boxes.filter( ( box ) => box.checked );
-		const excluded = selected.reduce(
-			( total, box ) => total + box.closest( '.crq-picker-row' ).querySelectorAll( '.crq-columns input:not(:checked)' ).length,
-			0
-		);
-		const options = [
-			data.has( 'case_insensitive' ) ? __( 'Any case', 'cr-relocate-db' ) : __( 'Exact case', 'cr-relocate-db' ),
-			data.has( 'whole_words' ) ? __( 'whole words', 'cr-relocate-db' ) : '',
-			data.has( 'url_variants' ) ? __( 'URL versions', 'cr-relocate-db' ) : '',
-		].filter( Boolean );
+		form.querySelectorAll( 'input[name="tables[]"]' ).forEach( ( box ) => {
+			box.checked = 'core' === box.dataset.group;
+		} );
 
-		const set = ( key, value ) => {
-			summary.querySelector( `[data-summary="${ key }"]` ).textContent = value;
-		};
+		form.querySelectorAll( '.crq-columns' ).forEach( ( columns ) => {
+			const boxes = columns.querySelectorAll( 'input' );
+			boxes.forEach( ( box ) => {
+				box.checked = true;
+			} );
+			columns.querySelector( '.crq-columns-selected' ).textContent = numbers.format( boxes.length );
+		} );
+	}
 
-		/* translators: %s: number of search and replacement pairs. */
-		set( 'pairs', pairs ? sprintf( _n( '%s pair', '%s pairs', pairs, 'cr-relocate-db' ), numbers.format( pairs ) ) : '—' );
-		/* translators: 1: selected tables, 2: all tables. */
-		set( 'tables', sprintf( __( '%1$s of %2$s', 'cr-relocate-db' ), numbers.format( selected.length ), numbers.format( boxes.length ) ) );
-		set( 'columns', excluded ? numbers.format( excluded ) : __( 'None', 'cr-relocate-db' ) );
-		set( 'options', options.join( ', ' ) );
+	/**
+	 * The options that are on, next to the folded "Advanced options" heading.
+	 */
+	function updateAdvancedSummary() {
+		const on = [ ...form.querySelectorAll( '.crq-options input:checked' ) ].map( ( box ) => box.dataset.short );
+
+		document.getElementById( 'crq-advanced-summary' ).textContent = on.length ? `· ${ on.join( ', ' ) }` : '';
 	}
 
 	/**
@@ -286,14 +377,16 @@
 
 				if ( index > 0 ) {
 					const [ searchLabel, replaceLabel ] = row.querySelectorAll( 'label' );
+					const remove = row.querySelector( '.crq-pair-remove' );
 					searchLabel.htmlFor = search.id;
 					replaceLabel.htmlFor = replace.id;
 					/* translators: %d: pair number. */
-					searchLabel.textContent = sprintf( __( 'Search for, pair %d', 'cr-relocate-db' ), number );
+					searchLabel.textContent = sprintf( __( 'Find, pair %d', 'cr-relocate-db' ), number );
 					/* translators: %d: pair number. */
 					replaceLabel.textContent = sprintf( __( 'Replace with, pair %d', 'cr-relocate-db' ), number );
+					remove.querySelector( '.crq-pair-remove-label' ).textContent = __( 'Remove', 'cr-relocate-db' );
 					/* translators: %d: pair number. */
-					row.querySelector( '.crq-pair-remove .screen-reader-text' ).textContent = sprintf( __( 'Remove pair %d', 'cr-relocate-db' ), number );
+					remove.setAttribute( 'aria-label', sprintf( __( 'Remove pair %d', 'cr-relocate-db' ), number ) );
 				}
 			} );
 
@@ -338,10 +431,11 @@
 	async function onSubmit( event ) {
 		event.preventDefault();
 
+		clearNotices();
+		applyScope();
+
 		const data = new FormData( form );
 		const tables = data.getAll( 'tables[]' );
-
-		clearNotices();
 
 		if ( ! tables.length ) {
 			showNotice( 'error', __( 'Select at least one table to search.', 'cr-relocate-db' ) );
@@ -373,6 +467,7 @@
 			return;
 		}
 
+		form.hidden = true;
 		speak( __( 'Dry run started.', 'cr-relocate-db' ) );
 		run( job );
 	}
@@ -444,16 +539,13 @@
 	 */
 	async function run( job ) {
 		cancelRequested = false;
-		setStep( job.dry_run ? 2 : 3 );
+		setStep( 3 );
 		startProgress( job );
 		setBusy( true, ! job.dry_run );
 
 		try {
 			while ( ! job.finished ) {
-				job = await apiFetch( {
-					path: `${ API }/${ job.id }/${ cancelRequested ? 'cancel' : 'run' }`,
-					method: 'POST',
-				} );
+				job = await step( job );
 				updateProgress( job );
 			}
 		} catch ( error ) {
@@ -473,11 +565,54 @@
 		if ( job.dry_run ) {
 			dryRun = job;
 			renderDryRun( job );
-			setStep( job.executable ? 3 : 1 );
 		} else {
 			renderLiveRun( job );
 			setStep( 'completed' === job.status ? 4 : 3 );
 		}
+	}
+
+	/**
+	 * Sends one run (or cancel) request, retrying a few times when the failure
+	 * is likely to pass. Repeating a step is safe: the server works from the
+	 * job's last saved position, under a lock.
+	 *
+	 * @param {Object} job Job as returned by the REST API.
+	 * @return {Promise<Object>} The job after the step.
+	 */
+	async function step( job ) {
+		for ( let attempt = 0; ; attempt++ ) {
+			try {
+				return await apiFetch( {
+					path: `${ API }/${ job.id }/${ cancelRequested ? 'cancel' : 'run' }`,
+					method: 'POST',
+				} );
+			} catch ( error ) {
+				if ( attempt >= RETRY_DELAYS.length || ! isTransient( error ) ) {
+					throw error;
+				}
+
+				progress.text.textContent = __( 'The connection was interrupted. Trying again…', 'cr-relocate-db' );
+				await new Promise( ( resolve ) => setTimeout( resolve, RETRY_DELAYS[ attempt ] ) );
+			}
+		}
+	}
+
+	/**
+	 * No response, a non-JSON error page (as proxies return on a timeout),
+	 * a server error, or the job still locked by a step that is finishing.
+	 *
+	 * @param {Object} error Rejection from apiFetch.
+	 * @return {boolean} Whether retrying may help.
+	 */
+	function isTransient( error ) {
+		const code = error && error.code;
+		const status = error && error.data && error.data.status;
+
+		return ! code
+			|| 'fetch_error' === code
+			|| 'invalid_json' === code
+			|| 'crq_relocate_job_busy' === code
+			|| status >= 500;
 	}
 
 	async function execute( job, beforeImage ) {
@@ -650,7 +785,7 @@
 	/* Results ------------------------------------------------------------- */
 
 	function renderDryRun( job, announce = true ) {
-		const heading = startResults( __( 'Dry run results', 'cr-relocate-db' ) );
+		const heading = startResults( __( 'Preview', 'cr-relocate-db' ), __( 'Change search', 'cr-relocate-db' ) );
 
 		if ( 'completed' === job.status ) {
 			results.append( status( 'success', 'yes-alt', __( 'Dry run complete. Nothing in the database was changed.', 'cr-relocate-db' ) ) );
@@ -663,19 +798,21 @@
 
 		results.append(
 			tiles( [
-				[ 'database', __( 'Tables searched', 'cr-relocate-db' ), job.tables_done ],
-				[ 'editor-table', __( 'Rows scanned', 'cr-relocate-db' ), job.totals.rows_scanned ],
 				[ 'edit', __( 'Rows that would change', 'cr-relocate-db' ), job.totals.rows_changed ],
 				[ 'update', __( 'Replacements', 'cr-relocate-db' ), job.totals.replacements ],
 				[ 'shield', __( 'Left unchanged', 'cr-relocate-db' ), job.totals.skipped ],
-			] )
+			] ),
+			scanned( job )
 		);
 
+		// The next step comes straight after the totals; the examples below back it up.
 		if ( job.executable ) {
 			results.append( applySection( job ) );
 		} else if ( 'completed' === job.status && ! job.totals.rows_changed ) {
 			results.append( el( 'p', { className: 'crq-empty' }, __( 'No matches were found, so there is nothing to replace.', 'cr-relocate-db' ) ) );
 		}
+
+		appendSamples( job, __( 'What will change', 'cr-relocate-db' ) );
 
 		appendReport( job, __( 'Rows to change', 'cr-relocate-db' ) );
 
@@ -693,7 +830,7 @@
 	}
 
 	function renderLiveRun( job, announce = true ) {
-		const heading = startResults( __( 'Replacement results', 'cr-relocate-db' ) );
+		const heading = startResults( __( 'Replacement results', 'cr-relocate-db' ), __( 'Start another search', 'cr-relocate-db' ) );
 		let message;
 
 		if ( 'completed' === job.status ) {
@@ -724,12 +861,11 @@
 
 		results.append(
 			tiles( [
-				[ 'database', __( 'Tables processed', 'cr-relocate-db' ), job.tables_done ],
-				[ 'editor-table', __( 'Rows scanned', 'cr-relocate-db' ), job.totals.rows_scanned ],
 				[ 'edit', __( 'Rows changed', 'cr-relocate-db' ), job.totals.rows_changed ],
 				[ 'update', __( 'Replacements', 'cr-relocate-db' ), job.totals.replacements ],
 				[ 'shield', __( 'Left unchanged', 'cr-relocate-db' ), job.totals.skipped ],
-			] )
+			] ),
+			scanned( job )
 		);
 
 		if ( job.before_image_url ) {
@@ -754,6 +890,7 @@
 			);
 		}
 
+		appendSamples( job, __( 'What changed', 'cr-relocate-db' ) );
 		appendReport( job, __( 'Rows changed', 'cr-relocate-db' ) );
 		finishResults( heading, announce, message );
 	}
@@ -771,13 +908,17 @@
 		return el(
 			'section',
 			{ className: 'crq-card crq-apply' },
-			el( 'h3', { className: 'crq-card-title' }, __( 'Apply these changes', 'cr-relocate-db' ) ),
 			el(
-				'p',
+				'div',
 				{},
-				__( 'This writes the replacements shown here to the database, using exactly the search, replacement, tables and columns of this dry run. Rows are processed in batches; each batch is saved completely or not at all.', 'cr-relocate-db' )
+				el( 'h3', { className: 'crq-card-title' }, __( 'Happy with the preview?', 'cr-relocate-db' ) ),
+				el(
+					'p',
+					{},
+					__( 'Write exactly these changes to the database. You confirm once more first, and can save the original values to a file.', 'cr-relocate-db' )
+				)
 			),
-			el( 'p', {}, button )
+			button
 		);
 	}
 
@@ -787,7 +928,7 @@
 				el(
 					'div',
 					{ className: 'notice notice-info inline' },
-					el( 'p', {}, __( 'Some matching values are left unchanged because changing them could corrupt data. The reasons are listed per table below.', 'cr-relocate-db' ) )
+					el( 'p', {}, __( 'Some matching values are left unchanged because changing them could corrupt data. Open “Results per table” below to see where and why.', 'cr-relocate-db' ) )
 				)
 			);
 		}
@@ -796,18 +937,52 @@
 			return;
 		}
 
+		// The detail, folded away: the totals and examples above answer most questions.
 		results.append(
 			el(
-				'section',
-				{ className: 'crq-card' },
-				el( 'h3', { className: 'crq-card-title' }, __( 'Results per table', 'cr-relocate-db' ) ),
+				'details',
+				{ className: 'crq-card crq-disclosure' },
+				el(
+					'summary',
+					{},
+					el( 'span', { className: 'crq-card-title' }, __( 'Results per table', 'cr-relocate-db' ) ),
+					el(
+						'span',
+						{ className: 'crq-disclosure-count' },
+						/* translators: %s: number of tables. */
+						sprintf( _n( '%s table', '%s tables', job.report.tables.length, 'cr-relocate-db' ), numbers.format( job.report.tables.length ) )
+					)
+				),
 				tablesReport( job.report.tables, changedLabel )
 			)
 		);
+	}
 
-		if ( job.report.samples.length ) {
-			results.append( samples( job.report.samples ) );
+	/**
+	 * @param {Object} job   Finished job.
+	 * @param {string} title Heading for the examples.
+	 */
+	function appendSamples( job, title ) {
+		if ( job.report && job.report.samples.length ) {
+			results.append( samples( job.report.samples, title ) );
 		}
+	}
+
+	/**
+	 * @param {Object} job Finished job.
+	 * @return {HTMLElement} One line with what was searched.
+	 */
+	function scanned( job ) {
+		return el(
+			'p',
+			{ className: 'crq-results-meta' },
+			sprintf(
+				/* translators: 1: number of rows, 2: number of tables. */
+				_n( 'Searched %1$s rows in %2$s table.', 'Searched %1$s rows in %2$s tables.', job.tables_done, 'cr-relocate-db' ),
+				numbers.format( job.totals.rows_scanned ),
+				numbers.format( job.tables_done )
+			)
+		);
 	}
 
 	/**
@@ -990,17 +1165,17 @@
 		);
 	}
 
-	function samples( list ) {
+	function samples( list, title ) {
 		return el(
 			'section',
 			{ className: 'crq-card crq-samples' },
-			el( 'h3', { className: 'crq-card-title' }, __( 'Examples', 'cr-relocate-db' ) ),
+			el( 'h3', { className: 'crq-card-title' }, title ),
 			el(
 				'p',
 				{ className: 'description' },
 				sprintf(
 					/* translators: %s: number of examples. */
-					__( 'The first %s changes found, with a little surrounding text.', 'cr-relocate-db' ),
+					_n( '%s change found, with a little surrounding text.', 'The first %s changes found, with a little surrounding text.', list.length, 'cr-relocate-db' ),
 					numbers.format( list.length )
 				)
 			),
@@ -1088,9 +1263,26 @@
 
 	/* Helpers ------------------------------------------------------------- */
 
-	function startResults( title ) {
+	/**
+	 * @param {string}  title  Heading of the results.
+	 * @param {string=} action On Search & Replace, a button back to the form with this label.
+	 * @return {HTMLElement} The heading.
+	 */
+	function startResults( title, action ) {
 		const heading = el( 'h2', { tabIndex: -1, className: 'crq-title' }, title );
-		results.replaceChildren( heading );
+		const head = el( 'div', { className: 'crq-results-head' }, heading );
+
+		if ( form && action ) {
+			const back = el( 'button', { type: 'button', className: 'button' }, el( 'span', { ariaHidden: 'true' }, '← ' ), action );
+			back.addEventListener( 'click', () => {
+				results.hidden = true;
+				clearNotices();
+				showWizardStep( 1 );
+			} );
+			head.append( back );
+		}
+
+		results.replaceChildren( head );
 		return heading;
 	}
 

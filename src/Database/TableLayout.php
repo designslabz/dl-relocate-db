@@ -44,4 +44,35 @@ final class TableLayout {
 	public function except( string $column, array $values ): self {
 		return new self( $this->name, $this->key, $this->columns, $this->only, array( $column => $values ) + $this->except );
 	}
+
+	/**
+	 * Row-key comparison written out column by column, e.g. for (a, b) > (1, 2):
+	 * (a > 1) OR (a = 1 AND b > 2). Works on MySQL and MariaDB and uses the index.
+	 *
+	 * @param array<string, string> $values
+	 * @param '>'|'<='              $operator
+	 * @return array{0: string, 1: list<string>}
+	 */
+	public function compare( array $values, string $operator ): array {
+		$strict  = '>' === $operator ? '>' : '<';
+		$columns = array_keys( $this->key );
+		$last    = count( $columns ) - 1;
+		$clauses = array();
+		$args    = array();
+		$equal   = array();
+		$eq_args = array();
+
+		foreach ( $columns as $index => $column ) {
+			$placeholder = $this->key[ $column ] ? '%d' : '%s';
+			$op          = $index === $last ? $operator : $strict;
+
+			$clauses[] = '(' . implode( ' AND ', array_merge( $equal, array( "%i {$op} {$placeholder}" ) ) ) . ')';
+			$args      = array_merge( $args, $eq_args, array( $column, $values[ $column ] ) );
+
+			$equal[] = "%i = {$placeholder}";
+			$eq_args = array_merge( $eq_args, array( $column, $values[ $column ] ) );
+		}
+
+		return array( '(' . implode( ' OR ', $clauses ) . ')', $args );
+	}
 }

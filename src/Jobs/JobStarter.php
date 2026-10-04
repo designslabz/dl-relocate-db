@@ -14,6 +14,8 @@ use RuntimeException;
  *
  * A live replacement can only be started from a completed dry run, and copies
  * everything from it, so what runs is exactly what was previewed.
+ *
+ * phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are data, not output: they are escaped where they are shown.
  */
 final class JobStarter {
 
@@ -28,7 +30,6 @@ final class JobStarter {
 		private Logger $logger
 	) {}
 
-	/**
 	/**
 	 * The most search and replacement pairs one job may have.
 	 */
@@ -49,7 +50,7 @@ final class JobStarter {
 	 * @throws JobException When the request is invalid or the job cannot be saved.
 	 */
 	public function dry_run( array $pairs, array $options, array $tables, array $exclude_columns = array() ): Job {
-		$this->validate_pairs( $pairs, $options['case_sensitive'] );
+		self::validate_pairs( $pairs, $options['case_sensitive'] );
 
 		try {
 			new Replacement( $pairs, $options['case_sensitive'], $options['whole_words'], $options['url_variants'] );
@@ -127,7 +128,7 @@ final class JobStarter {
 		$job = $this->runner->exclusive(
 			'execute',
 			function () use ( $dry_run, $before_image ): Job {
-				if ( null !== $this->jobs->child_id( $dry_run->id ) ) {
+				if ( $this->jobs->was_applied( $dry_run ) ) {
 					throw new JobException( 'crq_relocate_already_executed', __( 'This dry run has already been applied. Run a new dry run to replace again.', 'cr-relocate-db' ), 409 );
 				}
 
@@ -135,7 +136,7 @@ final class JobStarter {
 					throw new JobException( 'crq_relocate_job_running', __( 'Another replacement is still running. Wait for it to finish or cancel it first.', 'cr-relocate-db' ), 409 );
 				}
 
-				return $this->create(
+				$job = $this->create(
 					new Job(
 						0,
 						$dry_run->id,
@@ -154,6 +155,10 @@ final class JobStarter {
 						gmdate( 'Y-m-d H:i:s' )
 					)
 				);
+
+				$this->mark_applied( $dry_run );
+
+				return $job;
 			}
 		);
 
@@ -178,12 +183,13 @@ final class JobStarter {
 	}
 
 	/**
-	 * Checked here, before the Replacement, so each problem gets its own translated message.
+	 * Checked before building a Replacement, so each problem gets its own
+	 * translated message. Exports use it for their optional pairs too.
 	 *
 	 * @param list<array{0: string, 1: string}> $pairs
 	 * @throws JobException When a pair cannot be used.
 	 */
-	private function validate_pairs( array $pairs, bool $case_sensitive ): void {
+	public static function validate_pairs( array $pairs, bool $case_sensitive ): void {
 		if ( ! $pairs ) {
 			throw new JobException( 'crq_relocate_empty_search', __( 'Enter the text or URL to search for.', 'cr-relocate-db' ) );
 		}
@@ -210,7 +216,8 @@ final class JobStarter {
 				throw new JobException( 'crq_relocate_same_values', __( 'The search and replacement values are the same, so there is nothing to change.', 'cr-relocate-db' ) . $which );
 			}
 
-			$key = $case_sensitive ? $search : strtolower( $search );
+			// Folded the same way as in Replacement, or a pair it rejects would get past this check.
+			$key = $case_sensitive ? $search : Replacement::lowercase( $search );
 
 			if ( isset( $seen[ $key ] ) ) {
 				throw new JobException( 'crq_relocate_duplicate_search', __( 'The same search value is entered twice.', 'cr-relocate-db' ) . $which );
@@ -275,6 +282,21 @@ final class JobStarter {
 		} catch ( RuntimeException $e ) {
 			$this->logger->error( 'Could not create a job.', array( 'error' => $e->getMessage() ) );
 			throw new JobException( 'crq_relocate_database_error', __( 'The job could not be saved to the database.', 'cr-relocate-db' ), 500 );
+		}
+	}
+
+	/**
+	 * Recorded on the dry run itself, so deleting the replacement from History
+	 * does not make the dry run look unapplied. The replacement row is enough
+	 * while it exists, so a failure here only costs that extra safeguard.
+	 */
+	private function mark_applied( Job $dry_run ): void {
+		$dry_run->state['applied'] = true;
+
+		try {
+			$this->jobs->save( $dry_run );
+		} catch ( RuntimeException $e ) {
+			$this->logger->warning( 'Could not mark the dry run as applied.', array( 'error' => $e->getMessage() ), $dry_run->id );
 		}
 	}
 

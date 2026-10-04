@@ -11,6 +11,8 @@ use RuntimeException;
  * All pairs are applied in one regex pass, so text produced by one pair is
  * never matched again by another, and a replacement that contains the search
  * value is applied exactly once.
+ *
+ * phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are data, not output: they are escaped where they are shown.
  */
 final class Replacer {
 

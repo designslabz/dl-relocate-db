@@ -66,7 +66,7 @@ final class JobFormatter {
 		if ( $job->dry_run ) {
 			$data['executable'] = JobStatus::Completed === $job->status
 				&& $data['totals']['rows_changed'] > 0
-				&& null === $this->jobs->child_id( $job->id );
+				&& ! $this->jobs->was_applied( $job );
 
 			// Only needed for the confirmation dialog.
 			if ( $data['executable'] ) {

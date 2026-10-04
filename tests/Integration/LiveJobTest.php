@@ -9,6 +9,7 @@ use CraftRoq\Relocate\Jobs\JobRepository;
 use CraftRoq\Relocate\Replace\Replacement;
 use CraftRoq\Relocate\Replace\Replacer;
 use CraftRoq\Relocate\Settings;
+use CraftRoq\Relocate\Storage;
 use WP_REST_Request;
 use WP_REST_Response;
 use WP_UnitTestCase;
@@ -94,7 +95,7 @@ final class LiveJobTest extends WP_UnitTestCase {
 		}
 
 		delete_option( Settings::OPTION );
-		( new BeforeImage( $wpdb ) )->delete_all();
+		Storage::delete_all();
 		wp_cache_flush();
 
 		// Last: DDL commits implicitly, which also makes the clean-up above stick
@@ -259,6 +260,20 @@ final class LiveJobTest extends WP_UnitTestCase {
 		$again = $this->request( 'POST', "/jobs/{$dry_run['id']}/execute", array( 'confirmed' => true ) );
 
 		$this->assertSame( 409, $again->get_status() );
+		$this->assertSame( 'crq_relocate_already_executed', $again->get_data()['code'] );
+		$this->assertFalse( $this->request( 'GET', "/jobs/{$dry_run['id']}" )->get_data()['executable'] );
+	}
+
+	public function test_a_dry_run_stays_applied_after_its_replacement_is_deleted(): void {
+		global $wpdb;
+
+		$dry_run = $this->dry_run( array( self::table() ) );
+		$live    = $this->execute( $dry_run );
+
+		( new JobRepository( $wpdb ) )->delete( $live['id'] );
+
+		$again = $this->request( 'POST', "/jobs/{$dry_run['id']}/execute", array( 'confirmed' => true ) );
+
 		$this->assertSame( 'crq_relocate_already_executed', $again->get_data()['code'] );
 		$this->assertFalse( $this->request( 'GET', "/jobs/{$dry_run['id']}" )->get_data()['executable'] );
 	}

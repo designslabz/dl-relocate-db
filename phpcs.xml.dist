@@ -17,9 +17,6 @@
 		<exclude name="WordPress.Files.FileName"/>
 		<!-- Working with the database directly is this plugin's purpose; every query is prepared and reviewed. -->
 		<exclude name="WordPress.DB.DirectDatabaseQuery"/>
-		<!-- This sniff only recognises prepare() on a variable literally named $wpdb, so it flags every
-		     $this->wpdb->prepare() call. InterpolatedNotPrepared still catches variables in SQL strings. -->
-		<exclude name="WordPress.DB.PreparedSQL.NotPrepared"/>
 		<!-- Exception messages are data, not output: they are escaped where they are shown
 		     (esc_html in templates, JSON in REST responses, plain text in WP-CLI). -->
 		<exclude name="WordPress.Security.EscapeOutput.ExceptionNotEscaped"/>
@@ -56,7 +53,7 @@
 	</rule>
 
 	<!-- Test fixtures build their own tables and set up the WordPress test environment. -->
-	<rule ref="WordPress.DB.PreparedSQL.InterpolatedNotPrepared">
+	<rule ref="WordPress.DB.PreparedSQL">
 		<exclude-pattern>/tests/*</exclude-pattern>
 	</rule>
 	<rule ref="WordPress.PHP.DiscouragedPHPFunctions.runtime_configuration_putenv">

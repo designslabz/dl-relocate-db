@@ -139,7 +139,10 @@ final class Replacement {
 		return substr( (string) json_encode( $text, $flags ), 1, -1 );
 	}
 
-	private static function lowercase( string $text ): string {
+	/**
+	 * Case folding used to tell whether two search values are the same.
+	 */
+	public static function lowercase( string $text ): string {
 		// mbstring is common but not guaranteed on WordPress hosts.
 		return function_exists( 'mb_strtolower' ) ? mb_strtolower( $text, 'UTF-8' ) : strtolower( $text );
 	}

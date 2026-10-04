@@ -4,6 +4,8 @@ declare( strict_types=1 );
 namespace CraftRoq\Relocate\Tests\Integration;
 
 use CraftRoq\Relocate\Admin\Admin;
+use CraftRoq\Relocate\Admin\ImportExport;
+use CraftRoq\Relocate\Transfer\TransferRepository;
 use CraftRoq\Relocate\Database\Schema;
 use CraftRoq\Relocate\Jobs\BeforeImage;
 use CraftRoq\Relocate\Jobs\Job;
@@ -48,14 +50,13 @@ final class AdminPagesTest extends WP_UnitTestCase {
 
 		$this->assertStringContainsString( 'Needs attention', $html );
 		$this->assertStringContainsString( 'Replacement #' . $failed->id, $html );
-		$this->assertStringContainsString( 'Quick search &amp; replace', $html );
+		$this->assertStringContainsString( 'Search and replace across your database', $html );
 		$this->assertStringContainsString( 'aria-current="page"', $html );
 	}
 
 	public function test_dashboard_without_any_jobs(): void {
 		$html = $this->render( array() );
 
-		$this->assertStringContainsString( 'Nothing has been replaced yet.', $html );
 		$this->assertStringContainsString( 'Move a site safely in three steps', $html, 'New users get the three-step introduction.' );
 	}
 
@@ -76,6 +77,7 @@ final class AdminPagesTest extends WP_UnitTestCase {
 
 		$this->assertStringContainsString( 'value="https://old.test/&quot;quoted&quot;"', $html );
 		$this->assertStringContainsString( 'value="https://new.test"', $html );
+		$this->assertStringContainsString( 'data-start-step="2"', $html, 'Coming from the dashboard skips to step 2.' );
 	}
 
 	public function test_quick_form_values_are_ignored_without_a_valid_nonce(): void {
@@ -93,8 +95,9 @@ final class AdminPagesTest extends WP_UnitTestCase {
 		$this->assertStringContainsString( 'value="wptests_posts"', $html );
 		$this->assertStringNotContainsString( 'value="wptests_crq_relocate_jobs"', $html );
 		$this->assertStringContainsString( 'id="crq-confirm"', $html );
-		$this->assertStringContainsString( 'id="crq-form-summary"', $html );
 		$this->assertStringContainsString( 'id="crq-steps"', $html );
+		$this->assertStringContainsString( 'name="scope" value="core" checked', $html, '"All WordPress tables" is the default.' );
+		$this->assertStringContainsString( 'data-start-step="1"', $html );
 	}
 
 	public function test_history_list_and_type_filter(): void {
@@ -193,8 +196,9 @@ final class AdminPagesTest extends WP_UnitTestCase {
 	public function test_database_list_search_and_sort(): void {
 		$search = $this->render(
 			array(
-				'tab' => 'database',
-				's'   => 'post',
+				'tab'  => 'settings',
+				'view' => 'database',
+				's'    => 'post',
 			)
 		);
 
@@ -204,7 +208,8 @@ final class AdminPagesTest extends WP_UnitTestCase {
 
 		$sorted = $this->render(
 			array(
-				'tab'     => 'database',
+				'tab'     => 'settings',
+				'view'    => 'database',
 				'orderby' => 'name',
 				'order'   => 'desc',
 			)
@@ -221,8 +226,25 @@ final class AdminPagesTest extends WP_UnitTestCase {
 	}
 
 	public function test_database_and_settings(): void {
-		$this->assertStringContainsString( 'Database information', $this->render( array( 'tab' => 'database' ) ) );
 		$this->assertStringContainsString( 'action="options.php"', $this->render( array( 'tab' => 'settings' ) ) );
+		$this->assertStringContainsString(
+			'class="crq-inline-facts"',
+			$this->render(
+				array(
+					'tab'  => 'settings',
+					'view' => 'database',
+				)
+			)
+		);
+		$this->assertStringContainsString(
+			'Ready to run replacements',
+			$this->render(
+				array(
+					'tab'  => 'settings',
+					'view' => 'status',
+				)
+			)
+		);
 	}
 
 	/**
@@ -246,7 +268,8 @@ final class AdminPagesTest extends WP_UnitTestCase {
 			$images,
 			new JobFormatter( $wpdb, $jobs, $schema, $images ),
 			new Logger( $wpdb ),
-			new Settings()
+			new Settings(),
+			new ImportExport( new TransferRepository( $wpdb ), $schema, new Settings() )
 		);
 
 		ob_start();

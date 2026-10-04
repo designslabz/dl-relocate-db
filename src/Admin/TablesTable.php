@@ -5,6 +5,8 @@ namespace CraftRoq\Relocate\Admin;
 
 use CraftRoq\Relocate\Database\Table;
 
+defined( 'ABSPATH' ) || exit;
+
 if ( ! class_exists( 'WP_List_Table' ) ) {
 	require_once ABSPATH . 'wp-admin/includes/class-wp-list-table.php';
 }
@@ -119,7 +121,7 @@ final class TablesTable extends \WP_List_Table {
 		foreach ( $views as $key => [ $prefixed, $label ] ) {
 			$links[ $key ] = sprintf(
 				'<a href="%1$s"%2$s>%3$s <span class="count">(%4$s)</span></a>',
-				esc_url( Admin::url( 'database', 'all' === $key ? array() : array( 'group' => $key ) ) ),
+				esc_url( Admin::url( 'settings', array( 'view' => 'database' ) + ( 'all' === $key ? array() : array( 'group' => $key ) ) ) ),
 				$current === $prefixed ? ' class="current" aria-current="page"' : '',
 				esc_html( $label ),
 				esc_html( number_format_i18n( $counts[ $key ] ) )

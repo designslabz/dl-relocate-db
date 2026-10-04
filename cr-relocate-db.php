@@ -80,6 +80,13 @@ add_action(
 	function () use ( $crq_relocate_runs_here ): void {
 		if ( ! $crq_relocate_runs_here() ) {
 			$notice = function (): void {
+				// Only where plugins are managed: a notice nobody can act on must not follow people around the dashboard.
+				$screen = get_current_screen();
+
+				if ( ! $screen || ! in_array( $screen->id, array( 'plugins', 'plugins-network' ), true ) ) {
+					return;
+				}
+
 				wp_admin_notice(
 					esc_html__( 'CR Relocate DB works on single sites. Multisite support is planned for CR Relocate DB Pro, so the plugin is not running on this network.', 'cr-relocate-db' ),
 					array( 'type' => 'warning' )

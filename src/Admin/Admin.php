@@ -13,10 +13,12 @@ use CraftRoq\Relocate\Logger;
 use CraftRoq\Relocate\Plugin;
 use CraftRoq\Relocate\Rest\JobFormatter;
 use CraftRoq\Relocate\Settings;
+use CraftRoq\Relocate\Storage;
 use RuntimeException;
 
 /**
- * The plugin's own admin menu: Dashboard, Search & Replace, History, Database and Settings.
+ * The plugin's own admin menu: Dashboard, Search & Replace, Import / Export,
+ * History and Settings (which also holds the database overview and system status).
  */
 final class Admin {
 
@@ -38,7 +40,8 @@ final class Admin {
 		private BeforeImage $before_images,
 		private JobFormatter $formatter,
 		private Logger $logger,
-		private Settings $settings
+		private Settings $settings,
+		private ImportExport $import_export
 	) {}
 
 	public function register(): void {
@@ -89,6 +92,31 @@ final class Admin {
 			? sprintf( __( 'Dry run #%d', 'cr-relocate-db' ), $job->id )
 			/* translators: %d: job number. */
 			: sprintf( __( 'Replacement #%d', 'cr-relocate-db' ), $job->id );
+	}
+
+	/**
+	 * What a job changes, e.g. "old.test → new.test (+1 more)", so lists say
+	 * more than a job number.
+	 *
+	 * @return string Escaped HTML.
+	 */
+	public static function job_change( Job $job ): string {
+		$more = count( $job->pairs() ) - 1;
+
+		return sprintf(
+			'<span class="crq-change-line"><code>%1$s</code> <span aria-hidden="true">→</span><span class="screen-reader-text">%2$s</span> <code>%3$s</code>%4$s</span>',
+			esc_html( self::excerpt( $job->search ) ),
+			esc_html__( 'replaced with', 'cr-relocate-db' ),
+			esc_html( '' === $job->replace ? __( '(removed)', 'cr-relocate-db' ) : self::excerpt( $job->replace ) ),
+			$more > 0
+				/* translators: %s: number of further search and replacement pairs. */
+				? ' <span class="crq-more">' . esc_html( sprintf( _n( '+ %s more', '+ %s more', $more, 'cr-relocate-db' ), number_format_i18n( $more ) ) ) . '</span>'
+				: ''
+		);
+	}
+
+	private static function excerpt( string $text ): string {
+		return mb_strlen( $text ) > 48 ? mb_substr( $text, 0, 47 ) . '…' : $text;
 	}
 
 	/**
@@ -151,13 +179,7 @@ final class Admin {
 			wp_die( esc_html__( 'That file no longer exists.', 'cr-relocate-db' ), '', array( 'response' => 404 ) );
 		}
 
-		nocache_headers();
-		header( 'Content-Type: application/gzip' );
-		header( 'Content-Disposition: attachment; filename="relocate-job-' . $job_id . '-original-values.sql.gz"' );
-		header( 'Content-Length: ' . filesize( $path ) );
-
-		readfile( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- Streams a large file without loading it into memory.
-		exit;
+		Storage::send( $path, 'relocate-job-' . $job_id . '-original-values.sql.gz', 'application/gzip' );
 	}
 
 	public function add_pages(): void {
@@ -267,6 +289,17 @@ final class Admin {
 			wp_set_script_translations( 'crq-relocate-search-replace', 'cr-relocate-db', dirname( $this->file ) . '/languages' );
 		}
 
+		if ( 'import-export' === $section ) {
+			wp_enqueue_script(
+				'crq-relocate-transfer',
+				plugins_url( 'assets/js/transfer.js', $this->file ),
+				array( 'wp-api-fetch', 'wp-i18n', 'wp-a11y' ),
+				Plugin::VERSION,
+				array( 'in_footer' => true )
+			);
+			wp_set_script_translations( 'crq-relocate-transfer', 'cr-relocate-db', dirname( $this->file ) . '/languages' );
+		}
+
 		if ( 'history' === $section ) {
 			wp_enqueue_script( 'crq-relocate-history', plugins_url( 'assets/js/history.js', $this->file ), array( 'wp-i18n' ), Plugin::VERSION, array( 'in_footer' => true ) );
 			wp_set_script_translations( 'crq-relocate-history', 'cr-relocate-db', dirname( $this->file ) . '/languages' );
@@ -281,8 +314,9 @@ final class Admin {
 			$args = match ( $current ) {
 				'dashboard'      => $this->dashboard_args(),
 				'search-replace' => $this->search_replace_args(),
+				'import-export'  => $this->import_export->args(),
 				'history'        => $this->history_args(),
-				'database'       => $this->database_args(),
+				'settings'       => $this->settings_args(),
 				default          => array(),
 			};
 		} catch ( RuntimeException $e ) {
@@ -322,8 +356,8 @@ final class Admin {
 		return array(
 			'dashboard'      => __( 'Dashboard', 'cr-relocate-db' ),
 			'search-replace' => __( 'Search & Replace', 'cr-relocate-db' ),
+			'import-export'  => __( 'Import / Export', 'cr-relocate-db' ),
 			'history'        => __( 'History', 'cr-relocate-db' ),
-			'database'       => __( 'Database', 'cr-relocate-db' ),
 			'settings'       => __( 'Settings', 'cr-relocate-db' ),
 		);
 	}
@@ -352,41 +386,71 @@ final class Admin {
 	private function dashboard_args(): array {
 		[ $recent ] = $this->jobs->page( 1, 5 );
 
+		return array(
+			'attention'    => $this->jobs->needing_attention(),
+			'recent'       => $recent,
+			'jobs'         => $this->jobs->stats()['jobs'],
+			'quick_action' => self::QUICK_ACTION,
+		);
+	}
+
+	/**
+	 * Settings has three views: the settings form, the database overview and system status.
+	 *
+	 * @return array<string, mixed>
+	 */
+	private function settings_args(): array {
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Read-only navigation.
+		$view = isset( $_GET['view'] ) ? sanitize_key( wp_unslash( $_GET['view'] ) ) : '';
+
+		return match ( $view ) {
+			'database' => array( 'view' => 'database' ) + $this->database_args(),
+			'status'   => array( 'view' => 'status' ) + $this->status_args(),
+			default    => array( 'view' => 'general' ),
+		};
+	}
+
+	/**
+	 * @return array<string, mixed>
+	 */
+	private function status_args(): array {
 		$uploads   = wp_upload_dir( null, false );
 		$retention = $this->settings->retention_days();
 		$cleanup   = wp_next_scheduled( Cleanup::HOOK );
-		$tables    = $this->schema->tables();
 
 		return array(
-			'attention'    => $this->jobs->needing_attention(),
-			'latest'       => $this->jobs->latest_live_job(),
-			'recent'       => $recent,
-			'stats'        => $this->jobs->stats() + array(
-				'tables' => count( $tables ),
-				'size'   => array_sum( array_map( fn( $table ): int => $table->size(), $tables ) ),
+			// What can affect a replacement, each marked ok, warning or info.
+			'checks'      => array(
+				wp_is_writable( $uploads['basedir'] )
+					? array( 'ok', __( 'Folder for original values', 'cr-relocate-db' ), __( 'Writable', 'cr-relocate-db' ) )
+					: array( 'warning', __( 'Folder for original values', 'cr-relocate-db' ), __( 'Not writable: replacements can only run without saving original values.', 'cr-relocate-db' ) ),
+				array( 'ok', __( 'PHP time limit', 'cr-relocate-db' ), $this->time_limit() ),
+				array( 'ok', __( 'PHP memory limit', 'cr-relocate-db' ), (string) ini_get( 'memory_limit' ) ),
+				array(
+					'info',
+					__( 'Persistent object cache', 'cr-relocate-db' ),
+					wp_using_ext_object_cache()
+						? __( 'Yes. It is flushed after every replacement.', 'cr-relocate-db' )
+						: __( 'No', 'cr-relocate-db' ),
+				),
+				array(
+					'info',
+					__( 'History clean-up', 'cr-relocate-db' ),
+					0 === $retention
+						? __( 'Off: all history is kept.', 'cr-relocate-db' )
+						: sprintf(
+							/* translators: 1: number of days, 2: date of the next clean-up. */
+							_n( 'After %1$s day. Next run: %2$s', 'After %1$s days. Next run: %2$s', $retention, 'cr-relocate-db' ),
+							number_format_i18n( $retention ),
+							$cleanup ? self::format_date( gmdate( 'Y-m-d H:i:s', $cleanup ) ) : __( 'not scheduled yet', 'cr-relocate-db' )
+						),
+				),
 			),
-			'quick_action' => self::QUICK_ACTION,
-			'status'       => array(
-				__( 'Plugin version', 'cr-relocate-db' )   => Plugin::VERSION,
-				__( 'WordPress', 'cr-relocate-db' )        => get_bloginfo( 'version' ),
-				__( 'PHP', 'cr-relocate-db' )              => PHP_VERSION,
-				__( 'Database server', 'cr-relocate-db' )  => $this->schema->server_info()['version'],
-				__( 'PHP time limit', 'cr-relocate-db' )   => $this->time_limit(),
-				__( 'PHP memory limit', 'cr-relocate-db' ) => (string) ini_get( 'memory_limit' ),
-				__( 'Persistent object cache', 'cr-relocate-db' ) => wp_using_ext_object_cache()
-					? __( 'Yes. It is flushed after every replacement.', 'cr-relocate-db' )
-					: __( 'No', 'cr-relocate-db' ),
-				__( 'Folder for original values', 'cr-relocate-db' ) => wp_is_writable( $uploads['basedir'] )
-					? __( 'Writable', 'cr-relocate-db' )
-					: __( 'Not writable: replacements can only run without saving original values.', 'cr-relocate-db' ),
-				__( 'History clean-up', 'cr-relocate-db' ) => 0 === $retention
-					? __( 'Off: all history is kept.', 'cr-relocate-db' )
-					: sprintf(
-						/* translators: 1: number of days, 2: date of the next clean-up. */
-						_n( 'After %1$s day. Next run: %2$s', 'After %1$s days. Next run: %2$s', $retention, 'cr-relocate-db' ),
-						number_format_i18n( $retention ),
-						$cleanup ? self::format_date( gmdate( 'Y-m-d H:i:s', $cleanup ) ) : __( 'not scheduled yet', 'cr-relocate-db' )
-					),
+			'environment' => array(
+				__( 'Plugin', 'cr-relocate-db' )    => Plugin::VERSION,
+				__( 'WordPress', 'cr-relocate-db' ) => get_bloginfo( 'version' ),
+				__( 'PHP', 'cr-relocate-db' )       => PHP_VERSION,
+				__( 'Database', 'cr-relocate-db' )  => $this->schema->server_info()['version'],
 			),
 		);
 	}

@@ -8,6 +8,8 @@ namespace CraftRoq\Relocate;
  *
  * Messages are for developers and stay in English. Never pass database cell
  * contents in the context: identify rows by table, column and key instead.
+ *
+ * phpcs:disable WordPress.DB.DirectDatabaseQuery -- Reading and writing the database directly is what this plugin is for, and results must never come from a cache.
  */
 final class Logger {
 
@@ -43,6 +45,7 @@ final class Logger {
 	 * @return array{0: list<object>, 1: int} The page of entries and the total number of matching entries.
 	 */
 	public function entries( int $page, int $per_page, ?int $job_id = null, ?string $level = null, string $search = '', string $order = 'desc', string $orderby = 'id' ): array {
+		$wpdb       = $this->wpdb;
 		$conditions = array();
 		$args       = array( $this->table() );
 
@@ -57,7 +60,7 @@ final class Logger {
 		}
 
 		if ( '' !== $search ) {
-			$like         = '%' . $this->wpdb->esc_like( $search ) . '%';
+			$like         = '%' . $wpdb->esc_like( $search ) . '%';
 			$conditions[] = '(message LIKE %s OR context LIKE %s)';
 			array_push( $args, $like, $like );
 		}
@@ -66,14 +69,16 @@ final class Logger {
 		$orderby = 'level' === $orderby ? 'level' : 'id';
 		$order   = 'asc' === strtolower( $order ) ? 'ASC' : 'DESC';
 
-		$entries = $this->wpdb->get_results(
-			// phpcs:ignore WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- Placeholders and values are built together.
-			$this->wpdb->prepare(
+		// $where holds only placeholders, with their values in $args; $order is ASC or DESC.
+		// phpcs:disable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, PluginCheck.Security.DirectDB.UnescapedDBParameter
+		$entries = $wpdb->get_results(
+			$wpdb->prepare(
 				'SELECT * FROM %i' . $where . ' ORDER BY %i ' . $order . ', id ' . $order . ' LIMIT %d OFFSET %d',
 				array_merge( $args, array( $orderby, $per_page, max( 0, $page - 1 ) * $per_page ) )
 			)
 		);
-		$total = (int) $this->wpdb->get_var( $this->wpdb->prepare( 'SELECT COUNT(*) FROM %i' . $where, $args ) );
+		$total   = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i' . $where, $args ) );
+		// phpcs:enable WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber, PluginCheck.Security.DirectDB.UnescapedDBParameter
 
 		return array( $entries, $total );
 	}
@@ -86,7 +91,9 @@ final class Logger {
 	 * @param string $cutoff UTC datetime.
 	 */
 	public function delete_before( string $cutoff ): void {
-		$this->wpdb->query( $this->wpdb->prepare( 'DELETE FROM %i WHERE created_at < %s', $this->table(), $cutoff ) );
+		$wpdb = $this->wpdb;
+
+		$wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE created_at < %s', $this->table(), $cutoff ) );
 	}
 
 	private function table(): string {

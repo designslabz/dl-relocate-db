@@ -18,6 +18,9 @@ use RuntimeException;
  *
  * For a live job those rows are read with FOR UPDATE inside the caller's
  * transaction, so nothing can change them between reading and writing.
+ *
+ * phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception messages are data, not output: they are escaped where they are shown.
+ * phpcs:disable WordPress.DB.DirectDatabaseQuery -- Reading and writing the database directly is what this plugin is for, and results must never come from a cache.
  */
 final class TableBatch {
 
@@ -129,7 +132,7 @@ final class TableBatch {
 		$conditions = array( $this->filters( $layout ) );
 
 		if ( null !== $after ) {
-			$conditions[] = $this->compare( $layout, $after, '>' );
+			$conditions[] = $layout->compare( $after, '>' );
 		}
 
 		[ $where, $where_args ] = $this->all_of( $conditions );
@@ -147,10 +150,10 @@ final class TableBatch {
 	 */
 	private function matching_rows( TableLayout $layout, ?array $after, array $last ): array {
 		$columns    = array_merge( array_keys( $layout->key ), array_keys( $layout->columns ) );
-		$conditions = array( $this->compare( $layout, $last, '<=' ), $this->like( $layout ), $this->filters( $layout ) );
+		$conditions = array( $layout->compare( $last, '<=' ), $this->like( $layout ), $this->filters( $layout ) );
 
 		if ( null !== $after ) {
-			$conditions[] = $this->compare( $layout, $after, '>' );
+			$conditions[] = $layout->compare( $after, '>' );
 		}
 
 		[ $where, $where_args ] = $this->all_of( $conditions );
@@ -195,37 +198,6 @@ final class TableBatch {
 	}
 
 	/**
-	 * Row-key comparison written out column by column, e.g. for (a, b) > (1, 2):
-	 * (a > 1) OR (a = 1 AND b > 2). Works on MySQL and MariaDB and uses the index.
-	 *
-	 * @param array<string, string> $values
-	 * @param '>'|'<='              $operator
-	 * @return array{0: string, 1: list<string>}
-	 */
-	private function compare( TableLayout $layout, array $values, string $operator ): array {
-		$strict  = '>' === $operator ? '>' : '<';
-		$columns = array_keys( $layout->key );
-		$last    = count( $columns ) - 1;
-		$clauses = array();
-		$args    = array();
-		$equal   = array();
-		$eq_args = array();
-
-		foreach ( $columns as $index => $column ) {
-			$placeholder = $layout->key[ $column ] ? '%d' : '%s';
-			$op          = $index === $last ? $operator : $strict;
-
-			$clauses[] = '(' . implode( ' AND ', array_merge( $equal, array( "%i {$op} {$placeholder}" ) ) ) . ')';
-			$args      = array_merge( $args, $eq_args, array( $column, $values[ $column ] ) );
-
-			$equal[] = "%i = {$placeholder}";
-			$eq_args = array_merge( $eq_args, array( $column, $values[ $column ] ) );
-		}
-
-		return array( '(' . implode( ' OR ', $clauses ) . ')', $args );
-	}
-
-	/**
 	 * Cheap pre-filter so only rows that could match are pulled into PHP. With a
 	 * case-insensitive (_ci) collation LIKE matches a superset of what the
 	 * Replacer will, which is fine. Case-sensitive (_bin, _cs, JSON) columns are
@@ -257,10 +229,13 @@ final class TableBatch {
 	 * @throws RuntimeException On a database error.
 	 */
 	private function query( string $sql, array $args ): array {
-		$rows = $this->wpdb->get_results( $this->wpdb->prepare( $sql, $args ), ARRAY_A );
+		$wpdb = $this->wpdb;
 
-		if ( '' !== $this->wpdb->last_error ) {
-			throw new RuntimeException( $this->wpdb->last_error );
+		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- $sql is built above from placeholders only; every name and value is in $args.
+		$rows = $wpdb->get_results( $wpdb->prepare( $sql, $args ), ARRAY_A );
+
+		if ( '' !== $wpdb->last_error ) {
+			throw new RuntimeException( $wpdb->last_error );
 		}
 
 		return $rows;

@@ -12,18 +12,20 @@ use CraftRoq\Relocate\Plugin;
 
 defined( 'ABSPATH' ) || exit;
 
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- Included from a method, so these variables are local.
+
 $icons = array(
 	'dashboard'      => 'dashboard',
 	'search-replace' => 'search',
+	'import-export'  => 'migrate',
 	'history'        => 'backup',
-	'database'       => 'database',
 	'settings'       => 'admin-generic',
 );
 ?>
 <div class="wrap crq-relocate">
 	<header class="crq-header">
 		<div class="crq-brand">
-			<img class="crq-brand-mark" src="<?php echo esc_url( $args['logo'] ); ?>" alt="" width="40" height="37">
+			<img class="crq-brand-mark" src="<?php echo esc_url( $args['logo'] ); ?>" alt="" width="40" height="28">
 			<h1 class="crq-brand-name">
 				<?php esc_html_e( 'CR Relocate DB', 'cr-relocate-db' ); ?>
 				<span class="crq-version"><?php echo esc_html( Plugin::VERSION ); ?></span>

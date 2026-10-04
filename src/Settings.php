@@ -89,7 +89,7 @@ final class Settings {
 			(int) $this->retention_days(),
 			(int) self::MAX_RETENTION_DAYS,
 			esc_html__( 'days', 'cr-relocate-db' ),
-			esc_html__( 'Finished jobs, their files of original values, and log entries older than this are deleted once a day. Enter 0 to keep everything.', 'cr-relocate-db' )
+			esc_html__( 'Finished jobs, abandoned dry runs, their files of original values, and log entries older than this are deleted once a day. Enter 0 to keep everything.', 'cr-relocate-db' )
 		);
 	}
 

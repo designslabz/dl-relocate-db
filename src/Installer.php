@@ -3,21 +3,27 @@ declare( strict_types=1 );
 
 namespace CraftRoq\Relocate;
 
-use CraftRoq\Relocate\Jobs\BeforeImage;
 use CraftRoq\Relocate\Jobs\Cleanup;
 
 /**
  * Creates and upgrades the plugin's tables, and removes them on uninstall.
+ *
+ * Version 3 adds the transfers table for database exports and imports.
+ *
+ * phpcs:disable WordPress.DB.DirectDatabaseQuery -- Reading and writing the database directly is what this plugin is for, and results must never come from a cache.
  */
 final class Installer {
 
 	/** Shared by every table this plugin creates, so they can be kept out of searches. */
 	public const TABLE_PREFIX = 'crq_relocate_';
 
-	public const JOBS_TABLE = self::TABLE_PREFIX . 'jobs';
-	public const LOG_TABLE  = self::TABLE_PREFIX . 'log';
+	public const JOBS_TABLE      = self::TABLE_PREFIX . 'jobs';
+	public const LOG_TABLE       = self::TABLE_PREFIX . 'log';
+	public const TRANSFERS_TABLE = self::TABLE_PREFIX . 'transfers';
 
-	private const DB_VERSION        = 2;
+	private const TABLES = array( self::JOBS_TABLE, self::LOG_TABLE, self::TRANSFERS_TABLE );
+
+	private const DB_VERSION        = 3;
 	private const DB_VERSION_OPTION = 'crq_relocate_db_version';
 
 	public function __construct( private \wpdb $wpdb ) {}
@@ -33,7 +39,7 @@ final class Installer {
 
 		$this->create_tables();
 
-		foreach ( array( self::JOBS_TABLE, self::LOG_TABLE ) as $table ) {
+		foreach ( self::TABLES as $table ) {
 			if ( ! $this->table_exists( $this->wpdb->prefix . $table ) ) {
 				// Leave the stored version alone so the upgrade is retried on the next admin request.
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
@@ -46,14 +52,16 @@ final class Installer {
 	}
 
 	public function uninstall(): void {
-		foreach ( array( self::JOBS_TABLE, self::LOG_TABLE ) as $table ) {
-			$this->wpdb->query( $this->wpdb->prepare( 'DROP TABLE IF EXISTS %i', $this->wpdb->prefix . $table ) );
+		$wpdb = $this->wpdb;
+
+		foreach ( self::TABLES as $table ) {
+			$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $wpdb->prefix . $table ) );
 		}
 
 		delete_option( self::DB_VERSION_OPTION );
 		delete_option( Settings::OPTION );
 
-		( new BeforeImage( $this->wpdb ) )->delete_all();
+		Storage::delete_all();
 		Cleanup::unschedule();
 	}
 
@@ -63,6 +71,7 @@ final class Installer {
 		$charset_collate = $this->wpdb->get_charset_collate();
 		$jobs_table      = $this->wpdb->prefix . self::JOBS_TABLE;
 		$log_table       = $this->wpdb->prefix . self::LOG_TABLE;
+		$transfers_table = $this->wpdb->prefix . self::TRANSFERS_TABLE;
 
 		// dbDelta is picky: one column per line, two spaces after PRIMARY KEY.
 		dbDelta(
@@ -103,11 +112,31 @@ final class Installer {
 				PRIMARY KEY  (id),
 				KEY job_id (job_id),
 				KEY created_at (created_at)
+			) {$charset_collate};
+
+			CREATE TABLE {$transfers_table} (
+				id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+				type varchar(10) NOT NULL,
+				status varchar(20) NOT NULL DEFAULT 'pending',
+				settings longtext NOT NULL,
+				state longtext NOT NULL,
+				file varchar(255) NOT NULL DEFAULT '',
+				token_hash varchar(64) NOT NULL DEFAULT '',
+				error_message text,
+				user_id bigint(20) unsigned NOT NULL DEFAULT 0,
+				created_at datetime NOT NULL,
+				finished_at datetime DEFAULT NULL,
+				updated_at datetime NOT NULL,
+				PRIMARY KEY  (id),
+				KEY status (status),
+				KEY created_at (created_at)
 			) {$charset_collate};"
 		);
 	}
 
 	private function table_exists( string $table ): bool {
-		return $table === $this->wpdb->get_var( $this->wpdb->prepare( 'SHOW TABLES LIKE %s', $this->wpdb->esc_like( $table ) ) );
+		$wpdb = $this->wpdb;
+
+		return $table === $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $wpdb->esc_like( $table ) ) );
 	}
 }
